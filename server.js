@@ -1,92 +1,72 @@
-const express = require("express");
-const cors = require("cors");
+// server.js
+// TASK 1.1 – Okamžitá odezva UI (ACK + polling)
 
-const { decideNextStep } = require("./decisionTree.js");
-const { askLLM } = require("./llm.js");
-const { addMessage, getContext } = require("./memory.js");
+const path = require("path");
+const express = require("express");
+
+const memory = require("./memory");
+const decisionTree = require("./decisionTree");
 
 const app = express();
+app.use(express.json({ limit: "1mb" }));
 
-/**
- * MIDDLEWARE
- */
-app.use(cors());
-app.use(express.json());
-app.use(express.static(".")); // chat.html
-
-/**
- * CHAT ENDPOINT
- */
-app.post("/think/chat", async (req, res) => {
-  try {
-    res.setHeader("X-NeoBot-Status", "processing");
-    res.setHeader("Cache-Control", "no-store");
-
-    const { message, sessionId } = req.body;
-
-    if (!message || !sessionId) {
-      return res.status(400).json({ error: "Missing message or sessionId" });
-    }
-
-    addMessage(sessionId, "user", message);
-
-    const decision = decideNextStep({ sessionId, message });
-
-    if (decision.action === "ASK") {
-      addMessage(sessionId, "assistant", decision.reply);
-      return res.json({
-        status: "ok",
-        action: "ASK",
-        reply: decision.reply
-      });
-    }
-
-    if (decision.action === "READY") {
-      await new Promise(r => setImmediate(r));
-
-      const reply = await askLLM({
-        message: `Vytvoř marketingovou strategii pro tento projekt:\n${JSON.stringify(
-          decision.profile,
-          null,
-          2
-        )}`,
-        context: []
-      });
-
-      addMessage(sessionId, "assistant", reply);
-
-      return res.json({
-        status: "ok",
-        action: "LLM_RESPONSE",
-        reply
-      });
-    }
-
-    await new Promise(r => setImmediate(r));
-
-    const reply = await askLLM({
-      message,
-      context: getContext(sessionId)
-    });
-
-    addMessage(sessionId, "assistant", reply);
-
-    return res.json({
-      status: "ok",
-      action: "LLM_RESPONSE",
-      reply
-    });
-
-  } catch (err) {
-    console.error("SERVER ERROR:", err);
-    res.status(500).json({ error: "Server error" });
-  }
+// frontend
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "chat.html"));
 });
 
-/**
- * START SERVER
- */
-const PORT = 3000;
+app.use(express.static(__dirname));
+
+// 🔴 JEDINÁ DŮLEŽITÁ FUNKCE
+async function runDecisionTree(sessionId, message) {
+  return await decisionTree.decideNextStep({
+    sessionId,
+    message,
+  });
+}
+
+// POST /think/chat → okamžitý ACK
+app.post("/think/chat", (req, res) => {
+  const sessionId = String(req.body.sessionId || "").trim();
+  const message = String(req.body.message || "").trim();
+
+  if (!sessionId || !message) {
+    return res.status(400).json({ status: "error", error: "Missing sessionId or message" });
+  }
+
+  const requestId = memory.createRequest(sessionId);
+
+  // okamžitá odezva UI
+  res.json({ status: "accepted", requestId });
+
+  // async zpracování
+  setImmediate(async () => {
+    try {
+      const result = await runDecisionTree(sessionId, message);
+      memory.setRequestResult(sessionId, requestId, result);
+    } catch (err) {
+      memory.setRequestError(sessionId, requestId, {
+        status: "error",
+        error: err.message,
+      });
+    }
+  });
+});
+
+// polling
+app.get("/think/result", (req, res) => {
+  const { sessionId, requestId } = req.query;
+
+  const r = memory.getRequest(sessionId, requestId);
+  if (!r) return res.status(404).json({ status: "error", error: "Unknown request" });
+
+  if (r.status === "pending") return res.json({ status: "pending" });
+  if (r.status === "error") return res.json({ status: "error", payload: r.payload });
+
+  return res.json({ status: "done", payload: r.payload });
+});
+
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("🚀 NeoBot server běží na portu 3000");
+  console.log(`NeoBot running on port ${PORT}`);
 });

@@ -1,138 +1,132 @@
 <!DOCTYPE html>
 <html lang="cs">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
   <title>NeoBot</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      background: #f6f6f6;
-      margin: 0;
-    }
-
-    header {
-      background: #fff;
-      padding: 15px;
-      font-size: 20px;
-      font-weight: bold;
-      border-bottom: 1px solid #ddd;
-    }
-
-    #chat {
-      background: #fff;
-      padding: 20px;
-      height: calc(100vh - 140px);
-      overflow-y: auto;
-    }
-
-    .msg {
-      margin-bottom: 12px;
-      line-height: 1.5;
-    }
-
-    .user {
-      color: #000;
-    }
-
-    .bot {
-      color: #0b5cff;
-    }
-
-    footer {
-      display: flex;
-      padding: 10px;
-      background: #f0f0f0;
-      border-top: 1px solid #ddd;
-    }
-
-    input {
-      flex: 1;
-      padding: 10px;
-      font-size: 16px;
-    }
-
-    button {
-      margin-left: 10px;
-      padding: 10px 20px;
-      font-size: 16px;
-      cursor: pointer;
-    }
+    body { margin:0; background:#0b1220; font-family:system-ui,-apple-system,BlinkMacSystemFont,sans-serif; color:#e5e7eb; display:flex; justify-content:center; align-items:center; height:100vh; }
+    .app { width:100%; max-width:900px; height:90vh; background:linear-gradient(180deg,#0f172a,#020617); border-radius:16px; display:flex; flex-direction:column; box-shadow:0 20px 60px rgba(0,0,0,.5); }
+    header { padding:16px 20px; border-bottom:1px solid #1e293b; display:flex; align-items:center; gap:10px; }
+    header .dot { width:10px; height:10px; background:#22c55e; border-radius:50%; }
+    header h1 { font-size:18px; margin:0; }
+    .tip { font-size:13px; color:#94a3b8; padding:10px 20px; border-bottom:1px solid #020617; }
+    .messages { flex:1; padding:20px; overflow-y:auto; }
+    .msg { max-width:70%; margin-bottom:16px; padding:14px 16px; border-radius:14px; line-height:1.4; white-space:pre-wrap; }
+    .bot { background:#020617; border:1px solid #1e293b; }
+    .user { background:#1e3a8a; margin-left:auto; }
+    footer { display:flex; gap:10px; padding:16px; border-top:1px solid #1e293b; }
+    input { flex:1; padding:14px; border-radius:12px; border:none; outline:none; background:#020617; color:#e5e7eb; font-size:15px; }
+    button { padding:14px 20px; border-radius:12px; border:none; background:#2563eb; color:white; font-weight:600; cursor:pointer; }
+    button:hover { background:#1d4ed8; }
+    button:disabled { opacity:.6; cursor:not-allowed; }
   </style>
 </head>
 <body>
 
-<header>🤖 NeoBot</header>
+<div class="app">
+  <header>
+    <div class="dot"></div>
+    <h1>NeoBot</h1>
+  </header>
 
-<div id="chat"></div>
+  <div class="tip">
+    Po refreshi se začne nový chat. Odesílání: ACK + polling (kompatibilní se serverem).
+  </div>
 
-<footer>
-  <input id="input" placeholder="Napiš zprávu…" />
-  <button onclick="send()">Odeslat</button>
-</footer>
+  <div id="messages" class="messages"></div>
+
+  <footer>
+    <input id="input" placeholder="Napiš zprávu…" />
+    <button id="sendBtn" type="button">Odeslat</button>
+  </footer>
+</div>
 
 <script>
-  const chat = document.getElementById("chat");
+  // ✅ nový chat po refreshi
+  localStorage.clear();
+  sessionStorage.clear();
+
+  const messages = document.getElementById("messages");
   const input = document.getElementById("input");
+  const sendBtn = document.getElementById("sendBtn");
 
-  // session + historie
-  const sessionId =
-    localStorage.getItem("neobot_session") ||
-    "web-" + Math.random().toString(36).substring(2, 10);
+  // ✅ sessionId bez crypto.randomUUID (funguje i na http)
+  function makeSessionId() {
+    return "sess_" + Math.random().toString(16).slice(2) + Date.now().toString(16);
+  }
+  const sessionId = makeSessionId();
 
-  localStorage.setItem("neobot_session", sessionId);
-
-  let history = JSON.parse(localStorage.getItem("neobot_history")) || [];
-
-  function saveHistory() {
-    localStorage.setItem("neobot_history", JSON.stringify(history));
+  function addMessage(text, who) {
+    const div = document.createElement("div");
+    div.className = "msg " + who;
+    div.textContent = text;
+    messages.appendChild(div);
+    messages.scrollTop = messages.scrollHeight;
+    return div;
   }
 
-  function addMessage(author, text, cls, save = true) {
-    const div = document.createElement("div");
-    div.className = "msg " + cls;
-    div.innerHTML =
-      "<strong>" + author + ":</strong><br>" +
-      text.replace(/\n/g, "<br>");
-    chat.appendChild(div);
-    chat.scrollTop = chat.scrollHeight;
+  function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
 
-    if (save) {
-      history.push({ author, text, cls });
-      saveHistory();
+  async function waitForResult(requestId, timeoutMs = 60000) {
+    const started = Date.now();
+
+    while (true) {
+      if (Date.now() - started > timeoutMs) throw new Error("Timeout: NeoBot neodpověděl včas.");
+
+      const r = await fetch(`/think/result?sessionId=${encodeURIComponent(sessionId)}&requestId=${encodeURIComponent(requestId)}`);
+      const data = await r.json();
+
+      if (data.status === "done") return data.payload;
+      if (data.status === "error") throw new Error(data.payload?.error || "NeoBot error");
+      await sleep(400);
     }
   }
-
-  // obnov historii po reloadu
-  history.forEach(m => addMessage(m.author, m.text, m.cls, false));
 
   async function send() {
     const text = input.value.trim();
     if (!text) return;
 
-    addMessage("Ty", text, "user");
     input.value = "";
+    addMessage(text, "user");
+    const thinkingEl = addMessage("NeoBot přemýšlí…", "bot");
+
+    sendBtn.disabled = true;
+    input.disabled = true;
 
     try {
       const res = await fetch("/think/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionId,
-          message: text
-        })
+        body: JSON.stringify({ sessionId, message: text })
       });
 
-      const data = await res.json();
-      addMessage("NeoBot", data.reply || "❌ Chyba odpovědi", "bot");
+      const accepted = await res.json();
+      if (!accepted || accepted.status !== "accepted" || !accepted.requestId) {
+        throw new Error("Server nevrátil requestId.");
+      }
 
+      const payload = await waitForResult(accepted.requestId);
+
+      thinkingEl.remove();
+      addMessage(payload?.reply || "…", "bot");
     } catch (e) {
-      addMessage("NeoBot", "❌ Server nedostupný", "bot");
+      thinkingEl.remove();
+      addMessage("NeoBot: " + (e?.message || "Neznámá chyba"), "bot");
+    } finally {
+      sendBtn.disabled = false;
+      input.disabled = false;
+      input.focus();
     }
   }
 
-  input.addEventListener("keydown", e => {
+  // ✅ eventy (klik + Enter)
+  sendBtn.addEventListener("click", send);
+  input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") send();
   });
+
+  addMessage("Ahoj 👋 Začněme nový chat. Napiš mi, co dnes řešíš.", "bot");
 </script>
 
 </body>
