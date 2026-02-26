@@ -88,14 +88,31 @@ async function generateBackground(params) {
     seed: Math.floor(Math.random() * 2147483647),
   };
 
+  const DEFAULT_RATE_LIMIT_RETRY_AFTER = 30;
+
+  function parseRetryAfterFromMessage(message) {
+    if (!message || typeof message !== "string") return DEFAULT_RATE_LIMIT_RETRY_AFTER;
+    const match = message.match(/"retry_after"\s*:\s*(\d+)/);
+    if (match) return Math.min(300, Math.max(1, parseInt(match[1], 10)));
+    return DEFAULT_RATE_LIMIT_RETRY_AFTER;
+  }
+
   let output;
   try {
     const p = replicate.run(MODEL_ID, { input });
     const t = new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), GENERATION_TIMEOUT_MS));
     output = await Promise.race([p, t]);
   } catch (e) {
-    if (e.message && e.message.includes("timeout")) throw new Error("Image generation timeout after 120 seconds");
-    throw new Error(`Replicate generation failed: ${e.message}`);
+    const msg = e?.message || "";
+    if (msg.includes("timeout")) throw new Error("Image generation timeout after 120 seconds");
+    if (msg.includes("429") || msg.includes("Too Many Requests")) {
+      const err = new Error("Replicate rate limit (429). Zkuste později.");
+      err.code = "RATE_LIMITED";
+      err.provider = "replicate";
+      err.retryAfterSeconds = parseRetryAfterFromMessage(msg);
+      throw err;
+    }
+    throw new Error(`Replicate generation failed: ${msg}`);
   }
   if (!output || !Array.isArray(output) || output.length === 0) throw new Error("Replicate returned no output");
   const imageUrl = output[0];

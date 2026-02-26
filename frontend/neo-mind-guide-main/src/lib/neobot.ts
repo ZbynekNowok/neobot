@@ -18,7 +18,11 @@ export async function neobotFetch(path: string, opts?: RequestInit) {
   if (!res.ok) {
     if (res.status === 401 || res.status === 403) throw new Error("Chybí nebo je neplatný API klíč.");
     if (res.status === 402) throw new Error("Došel kredit / units.");
-    throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
+    const msg = data?.message || data?.error || `HTTP ${res.status}`;
+    const err = new Error(msg) as Error & { status?: number; responseData?: Record<string, unknown> };
+    err.status = res.status;
+    err.responseData = data && typeof data === "object" ? data : undefined;
+    throw err;
   }
   return data;
 }

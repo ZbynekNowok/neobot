@@ -1,11 +1,52 @@
 "use strict";
 
+const crypto = require("crypto");
 const { fetch } = require("undici");
 const cheerio = require("cheerio");
 const { llmChat } = require("../llm/llmGateway.js");
+const { generateBackground, buildNegativePrompt } = require("../imageProviders/replicate.js");
 
 const FETCH_TIMEOUT_MS = 15000;
 const MAX_PROMPT_CHARS = 12000;
+const MAX_HTML_BYTES = 2 * 1024 * 1024; // 2 MB
+
+/** Logovat pouze bezpečné pole chyby (nelogovat HTML ani citlivá data). */
+function logFetchError(url, err, context) {
+  const cause = err?.cause;
+  const safe = {
+    context,
+    name: err?.name,
+    code: err?.code ?? cause?.code,
+    message: err?.message,
+    causeMessage: cause?.message,
+    causeCode: cause?.code,
+    status: err?.status,
+  };
+  const stack = err?.stack ? String(err.stack).split("\n").slice(0, 8).join("\n") : "";
+  console.warn("[adsStudio fetch error]", safe, stack ? "\n" + stack : "");
+}
+
+/**
+ * Přečte body response s limitem velikosti (max 2 MB). Větší obsah uřízne.
+ * @param {import("undici").Response} response
+ * @param {number} maxBytes
+ * @returns {Promise<string>}
+ */
+async function readBodyWithLimit(response, maxBytes = MAX_HTML_BYTES) {
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of response.body) {
+    total += chunk.length;
+    if (total <= maxBytes) {
+      chunks.push(chunk);
+    } else {
+      const remaining = maxBytes - (total - chunk.length);
+      if (remaining > 0) chunks.push(chunk.subarray(0, remaining));
+      break;
+    }
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
 
 /**
  * Stáhne HTML z URL (bez headless), vyčistí a vrátí text pro LLM.
@@ -16,24 +57,45 @@ async function fetchUrlContent(url) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
-  const response = await fetch(url, {
-    signal: controller.signal,
-    headers: {
-      "User-Agent": "NeoBot-AdsStudio/1.0 (marketing analysis)",
-      "Accept": "text/html,application/xhtml+xml",
-    },
-    redirect: "follow",
-  });
+  let response;
+  try {
+    response = await fetch(url, {
+      signal: controller.signal,
+      method: "GET",
+      headers: {
+        "User-Agent": "NeoBotAdsStudio/1.0 (+https://neobot.cz)",
+        "Accept": "text/html,application/xhtml+xml",
+      },
+      redirect: "follow",
+    });
+  } catch (err) {
+    clearTimeout(timeout);
+    logFetchError(url, err, "network");
+    const code = err?.cause?.code ?? err?.code ?? err?.name;
+    const e = new Error(err?.message || "fetch failed");
+    e.code = "FETCH_FAILED";
+    e.causeCode = code;
+    throw e;
+  }
   clearTimeout(timeout);
 
   if (!response.ok) {
     const err = new Error(`HTTP ${response.status}`);
     err.status = response.status;
-    if (response.status === 403 || response.status === 404) err.code = "FETCH_FAILED";
+    err.code = "FETCH_FAILED";
     throw err;
   }
 
-  const html = await response.text();
+  let html;
+  try {
+    html = await readBodyWithLimit(response);
+  } catch (err) {
+    logFetchError(url, err, "body_read");
+    const e = new Error(err?.message || "body read failed");
+    e.code = "FETCH_FAILED";
+    throw e;
+  }
+
   const $ = cheerio.load(html);
 
   $("script, style, noscript, iframe").remove();
@@ -156,7 +218,191 @@ Všechny texty v češtině. Pole services a usp mohou mít 0 až cca 10 polože
   };
 }
 
+/** Formát obrázku → rozměry (šířka, výška) pro Replicate. */
+const IMAGE_FORMAT_DIMENSIONS = {
+  square: { width: 1080, height: 1080 },
+  story: { width: 1080, height: 1920 },
+};
+
+/**
+ * Získá pouze brand kontext z URL (bez plného ads draft). Pro F2 – generování obrázků.
+ * @param {string} url - http(s) URL
+ * @param {string} [requestId]
+ * @returns {Promise<{ name: string, description: string, services: string[], usp: string[], tone: string, target_audience: string }>}
+ */
+async function getBrandContextFromUrl(url, requestId = "ads-brand") {
+  const content = await fetchUrlContent(url);
+  const prompt = `Na základě obsahu webu vrať JEDINĚ platný JSON (žádný další text) s brand summary. Struktura:
+{
+  "brand": {
+    "name": "string",
+    "description": "string",
+    "services": ["string"],
+    "usp": ["string"],
+    "tone": "string",
+    "target_audience": "string"
+  }
+}
+OBSAH WEBU:
+Title: ${content.title}
+Meta: ${content.metaDescription}
+Tělo: ${content.bodyText.slice(0, 4000)}
+Vše v češtině. Pole services a usp 0–10 položek.`;
+
+  const response = await llmChat({
+    requestId,
+    model: "gpt-4o-mini",
+    purpose: "ads_brand_context",
+    messages: [{ role: "user", content: prompt }],
+    temperature: 0.5,
+    maxOutputTokens: 1500,
+  });
+
+  const text = (response.output_text || "").trim();
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error("LLM nevrátil platný JSON pro brand");
+
+  let data;
+  try {
+    data = JSON.parse(jsonMatch[0]);
+  } catch (e) {
+    throw new Error("Neplatný JSON z LLM (brand)");
+  }
+
+  const brand = data.brand && typeof data.brand === "object" ? data.brand : {};
+  const ensureString = (v) => (typeof v === "string" ? v : String(v || "").trim() || "");
+  const ensureArr = (v) => {
+    if (!Array.isArray(v)) return [];
+    return v.filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim());
+  };
+  return {
+    name: ensureString(brand.name),
+    description: ensureString(brand.description),
+    services: ensureArr(brand.services),
+    usp: ensureArr(brand.usp),
+    tone: ensureString(brand.tone),
+    target_audience: ensureString(brand.target_audience),
+  };
+}
+
+const MAX_ADS_IMAGES = 6;
+const IMAGE_GENERATION_TIMEOUT_MS = 125000; // o něco víc než Replicate 120s
+const TOTAL_IMAGES_TIMEOUT_MS = 360000; // 6 min celkem
+const DELAY_BETWEEN_IMAGES_MS = 2000; // 1–2 s mezi obrázky, aby se netrefil rate limit
+const BACKOFF_DELAYS_MS = [5000, 15000]; // exponenciální backoff: max 2 retry (5s, 15s)
+
+/**
+ * Vygeneruje 3–6 reklamních obrázků na základě URL (brand context + Replicate).
+ * @param {string} url - http(s) URL
+ * @param {{ count?: number, format?: "square"|"story"|"both", requestId?: string }} options
+ * @returns {Promise<{ images: Array<{ url: string, format: string, prompt: string, caption: string }> }>}
+ */
+async function generateImagesFromUrl(url, options = {}) {
+  const count = Math.min(MAX_ADS_IMAGES, Math.max(3, Number(options.count) || 4));
+  const format = ["square", "story", "both"].includes(options.format) ? options.format : "square";
+  const requestId = options.requestId || `ads-img-${Date.now()}`;
+
+  const brand = await getBrandContextFromUrl(url, requestId);
+
+  const promptForPrompts = `Jsi expert na reklamní vizuály. Pro brand "${brand.name}" (${brand.description}) vytvoř ${count} nápadů na reklamní obrázky.
+Cílová skupina: ${brand.target_audience}. Tón: ${brand.tone}. USP: ${(brand.usp || []).slice(0, 5).join(", ")}.
+Pro každý obrázek vrať krátký popis scény pro generování obrázku (v angličtině, pro AI image model): co má být na obrázku, nálada, styl. BEZ textu v obrázku.
+A také krátký caption/headline v češtině pro sociální sítě (CTA).
+Vrať JEDINĚ platný JSON:
+{ "items": [ { "prompt": "english scene description for image, no text in image", "caption": "český caption / CTA" }, ... ] }
+Přesně ${count} položek v items.`;
+
+  const llmRes = await llmChat({
+    requestId: `${requestId}-prompts`,
+    model: "gpt-4o-mini",
+    purpose: "ads_image_prompts",
+    messages: [{ role: "user", content: promptForPrompts }],
+    temperature: 0.8,
+    maxOutputTokens: 2000,
+  });
+
+  const text = (llmRes.output_text || "").trim();
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error("LLM nevrátil platný JSON pro image prompts");
+
+  let items;
+  try {
+    const parsed = JSON.parse(jsonMatch[0]);
+    items = Array.isArray(parsed.items) ? parsed.items : [];
+  } catch (e) {
+    throw new Error("Neplatný JSON pro image prompts");
+  }
+
+  const negativePrompt = buildNegativePrompt();
+  const formatsToGenerate = []; // { format: "square"|"story", index }
+  if (format === "both") {
+    const half = Math.floor(count / 2);
+    for (let i = 0; i < count; i++) formatsToGenerate.push({ format: i < half ? "square" : "story", index: i });
+  } else {
+    for (let i = 0; i < count; i++) formatsToGenerate.push({ format, index: i });
+  }
+
+  const images = [];
+  const startTime = Date.now();
+
+  for (let i = 0; i < formatsToGenerate.length; i++) {
+    if (Date.now() - startTime > TOTAL_IMAGES_TIMEOUT_MS) break;
+    if (i > 0) await new Promise((r) => setTimeout(r, DELAY_BETWEEN_IMAGES_MS));
+
+    const { format: fmt, index } = formatsToGenerate[i];
+    const item = items[index] || items[items.length - 1] || { prompt: "professional marketing visual", caption: "Zjistit více" };
+    const promptText = typeof item.prompt === "string" && item.prompt.trim() ? item.prompt.trim() : "professional advertising visual, clean, modern";
+    const caption = typeof item.caption === "string" && item.caption.trim() ? item.caption.trim() : "Zjistit více";
+    const dims = IMAGE_FORMAT_DIMENSIONS[fmt] || IMAGE_FORMAT_DIMENSIONS.square;
+    const jobId = `ads-${requestId}-${i}-${crypto.randomUUID().slice(0, 8)}`;
+
+    let result;
+    let lastErr;
+    for (let attempt = 0; attempt <= BACKOFF_DELAYS_MS.length; attempt++) {
+      try {
+        result = await Promise.race([
+          generateBackground({
+            prompt: promptText,
+            negativePrompt,
+            width: dims.width,
+            height: dims.height,
+            jobId: attempt === 0 ? jobId : `${jobId}-retry${attempt}`,
+          }),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), IMAGE_GENERATION_TIMEOUT_MS)),
+        ]);
+        break;
+      } catch (err) {
+        lastErr = err;
+        if (err?.code === "RATE_LIMITED") throw err;
+        if (err?.message?.includes("timeout")) {
+          const e = new Error("Image generation timeout");
+          e.code = "IMAGE_PROVIDER_FAILED";
+          throw e;
+        }
+        if (attempt < BACKOFF_DELAYS_MS.length) {
+          await new Promise((r) => setTimeout(r, BACKOFF_DELAYS_MS[attempt]));
+        } else {
+          const e = new Error(err?.message || "Replicate failed");
+          e.code = "IMAGE_PROVIDER_FAILED";
+          throw e;
+        }
+      }
+    }
+
+    images.push({
+      url: result.publicUrl,
+      format: fmt,
+      prompt: promptText,
+      caption,
+    });
+  }
+
+  return { images };
+}
+
 module.exports = {
   fetchUrlContent,
   analyzeUrlAndDraftAds,
+  getBrandContextFromUrl,
+  generateImagesFromUrl,
 };

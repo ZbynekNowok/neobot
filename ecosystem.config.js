@@ -15,7 +15,8 @@ module.exports = {
 
       env: {
         NODE_ENV: "production",
-        LLM_ENABLED: "true"
+        LLM_ENABLED: "true",
+        NODE_EXTRA_CA_CERTS: "/etc/ssl/certs/ca-certificates.crt"
       },
 
       output: "/home/vpsuser/.pm2/logs/neobot-out.log",

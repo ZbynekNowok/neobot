@@ -1,10 +1,10 @@
 import { useState } from "react";
-import { Megaphone, Loader2, Copy } from "lucide-react";
+import { Megaphone, Loader2, Copy, ImageIcon, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { neobotFetch } from "@/lib/neobot";
+import { neobotFetch, NEOBOT_API_BASE } from "@/lib/neobot";
 
 interface AdsDraftBrand {
   name: string;
@@ -27,13 +27,28 @@ interface AdsDraftResult {
   ads: AdsDraftAds;
 }
 
+interface AdsImageItem {
+  url: string;
+  format: string;
+  prompt: string;
+  caption: string;
+}
+
 type Status = "idle" | "loading" | "error" | "success";
+type ImageStatus = "idle" | "loading" | "error" | "success";
 
 export default function AdsStudioPage() {
   const [url, setUrl] = useState("");
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AdsDraftResult | null>(null);
+
+  const [imageStatus, setImageStatus] = useState<ImageStatus>("idle");
+  const [imageError, setImageError] = useState<string | null>(null);
+  const [imageRetryAfterSeconds, setImageRetryAfterSeconds] = useState<number | null>(null);
+  const [imageResult, setImageResult] = useState<AdsImageItem[]>([]);
+  const [imageCount, setImageCount] = useState(4);
+  const [imageFormat, setImageFormat] = useState<"square" | "story" | "both">("square");
 
   const handleGenerate = async () => {
     const u = url.trim();
@@ -75,6 +90,51 @@ export default function AdsStudioPage() {
   const copyText = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
     toast.success(`${label} zkopírováno`);
+  };
+
+  const handleGenerateImages = async () => {
+    const u = url.trim();
+    if (!u) {
+      toast.error("Zadej URL webu (nahoře)");
+      return;
+    }
+    if (!/^https?:\/\//i.test(u)) {
+      toast.error("URL musí začínat na http:// nebo https://");
+      return;
+    }
+    setImageStatus("loading");
+    setImageError(null);
+    setImageRetryAfterSeconds(null);
+    setImageResult([]);
+    try {
+      const data = await neobotFetch("/api/ads/images", {
+        method: "POST",
+        body: JSON.stringify({ url: u, count: imageCount, format: imageFormat }),
+      });
+      if (!data?.ok || !Array.isArray(data?.images)) {
+        throw new Error(data?.message || data?.error || "Nepodařilo se vygenerovat obrázky");
+      }
+      setImageResult(data.images);
+      setImageStatus("success");
+      toast.success(`Vygenerováno ${data.images.length} obrázků`);
+    } catch (err: any) {
+      const status = err?.status;
+      const responseData = err?.responseData;
+      const isRateLimited = status === 429 || responseData?.error === "RATE_LIMITED";
+      const retryAfter = typeof responseData?.retryAfterSeconds === "number" ? responseData.retryAfterSeconds : null;
+
+      if (isRateLimited) {
+        setImageError("Replicate rate limit. Zkuste později.");
+        setImageRetryAfterSeconds(retryAfter ?? 30);
+        toast.error("Překročen limit požadavků. Zkuste to za chvíli.");
+      } else {
+        const msg = err?.message || "Chyba při generování obrázků";
+        setImageError(msg);
+        setImageRetryAfterSeconds(null);
+        toast.error(msg);
+      }
+      setImageStatus("error");
+    }
   };
 
   const renderList = (items: string[], title: string, maxChars?: number) => (
@@ -142,9 +202,131 @@ export default function AdsStudioPage() {
         </div>
       </div>
 
+      <div className="glass rounded-xl p-6 mb-6">
+        <h2 className="font-semibold text-lg text-foreground mb-3 flex items-center gap-2">
+          <ImageIcon className="w-5 h-5" />
+          Obrázkové reklamy (3–6)
+        </h2>
+        <p className="text-muted-foreground text-sm mb-4">
+          Vygeneruj reklamní obrázky podle URL webu. Použij stejnou URL jako výše.
+        </p>
+        <div className="flex flex-wrap items-end gap-4">
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs">Počet</Label>
+            <select
+              value={imageCount}
+              onChange={(e) => setImageCount(Number(e.target.value))}
+              disabled={imageStatus === "loading"}
+              className="rounded-md border bg-background px-3 py-2 text-sm"
+            >
+              {[3, 4, 5, 6].map((n) => (
+                <option key={n} value={n}>{n}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs">Formát</Label>
+            <select
+              value={imageFormat}
+              onChange={(e) => setImageFormat(e.target.value as "square" | "story" | "both")}
+              disabled={imageStatus === "loading"}
+              className="rounded-md border bg-background px-3 py-2 text-sm"
+            >
+              <option value="square">Čtverec (1080×1080)</option>
+              <option value="story">Story (1080×1920)</option>
+              <option value="both">Obojí</option>
+            </select>
+          </div>
+          <Button
+            onClick={handleGenerateImages}
+            disabled={imageStatus === "loading" || !url.trim()}
+            className="gap-2"
+          >
+            {imageStatus === "loading" ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Generuji obrázky…
+              </>
+            ) : (
+              "Vygenerovat obrázky"
+            )}
+          </Button>
+        </div>
+      </div>
+
       {status === "error" && error && (
         <div className="rounded-xl border border-destructive/50 bg-destructive/10 p-4 text-destructive mb-6">
           {error}
+        </div>
+      )}
+
+      {imageStatus === "error" && imageError && (
+        <div className="rounded-xl border border-destructive/50 bg-destructive/10 p-4 text-destructive mb-6 space-y-2">
+          <p>{imageError}</p>
+          {imageRetryAfterSeconds != null && (
+            <p className="text-sm opacity-90">
+              Doporučený čas před opakováním: <strong>{imageRetryAfterSeconds} s</strong>
+            </p>
+          )}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => handleGenerateImages()}
+            className="mt-2"
+          >
+            Zkusit znovu
+          </Button>
+        </div>
+      )}
+
+      {imageStatus === "success" && imageResult.length > 0 && (
+        <div className="mb-8">
+          <h2 className="font-semibold text-lg text-foreground mb-4">Vygenerované obrázky</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {imageResult.map((img, i) => (
+              <div key={i} className="glass rounded-xl overflow-hidden">
+                <a
+                  href={`${NEOBOT_API_BASE}${img.url}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block aspect-square bg-muted"
+                >
+                  <img
+                    src={`${NEOBOT_API_BASE}${img.url}`}
+                    alt={img.caption || `Reklama ${i + 1}`}
+                    className="w-full h-full object-cover"
+                  />
+                </a>
+                <div className="p-3 space-y-2">
+                  <p className="text-sm text-foreground line-clamp-2">{img.caption}</p>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="gap-1"
+                      onClick={() => copyText(img.caption, "Caption")}
+                    >
+                      <Copy className="w-3 h-3" />
+                      Kopírovat caption
+                    </Button>
+                    <a
+                      href={`${NEOBOT_API_BASE}${img.url}`}
+                      download
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <Button type="button" variant="outline" size="sm" className="gap-1">
+                        <Download className="w-3 h-3" />
+                        Stáhnout
+                      </Button>
+                    </a>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

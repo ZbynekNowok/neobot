@@ -1,5 +1,9 @@
 "use strict";
 
+/** Preferovat IPv4 při DNS (častý fix na VPS – vyhnutí se IPv6 problémům). */
+const dns = require("node:dns");
+if (dns.setDefaultResultOrder) dns.setDefaultResultOrder("ipv4first");
+
 /**
  * Entry: health, design (Grafika s textem), me (Historie výstupů = GET /api/outputs).
  * Pokud používáš jiný vstupní soubor, přidej tam designRouter a meRouter.
@@ -89,7 +93,7 @@ try {
 try {
   const { adsStudioRouter } = require("./src/routes/adsStudio.js");
   app.use("/api", adsStudioRouter);
-  console.log("adsStudioRouter mounted: /api/ads/draft");
+  console.log("adsStudioRouter mounted: /api/ads/draft, /api/ads/images");
 } catch (e) {
   console.warn("adsStudioRouter not loaded:", e.message);
 }
