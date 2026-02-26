@@ -1,72 +1,99 @@
-// server.js
-// TASK 1.1 – Okamžitá odezva UI (ACK + polling)
+"use strict";
+
+/**
+ * Entry: health, design (Grafika s textem), me (Historie výstupů = GET /api/outputs).
+ * Pokud používáš jiný vstupní soubor, přidej tam designRouter a meRouter.
+ */
 
 const path = require("path");
+const fs = require("fs");
+
+const envPath = path.join(__dirname, ".env");
+require("dotenv").config({ path: envPath, override: true });
+
+if (!process.env.REPLICATE_API_TOKEN || process.env.REPLICATE_API_TOKEN.length < 10) {
+  try {
+    const raw = fs.readFileSync(envPath, "utf8");
+    const line = raw.split(/\r?\n/).find((l) => l.startsWith("REPLICATE_API_TOKEN="));
+    if (line) {
+      const val = line.slice("REPLICATE_API_TOKEN=".length).trim();
+      if (val.length >= 10) process.env.REPLICATE_API_TOKEN = val;
+    }
+  } catch (_) {}
+}
+
 const express = require("express");
-
-const memory = require("./memory");
-const decisionTree = require("./decisionTree");
-
+const cors = require("cors");
 const app = express();
-app.use(express.json({ limit: "1mb" }));
+const PORT = process.env.PORT || 3000;
 
-// frontend
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "chat.html"));
-});
+const { healthRouter } = require("./src/routes/health.js");
 
-app.use(express.static(__dirname));
+app.use(cors());
+app.use(express.json({ limit: "2mb" }));
+app.use(express.static(path.join(__dirname, "public")));
 
-// 🔴 JEDINÁ DŮLEŽITÁ FUNKCE
-async function runDecisionTree(sessionId, message) {
-  return await decisionTree.decideNextStep({
-    sessionId,
-    message,
+app.use(healthRouter);
+
+try {
+  const { designRouter } = require("./src/routes/design.js");
+  app.use("/api", designRouter);
+  console.log("designRouter mounted: /api/design/social-card/draft");
+} catch (e) {
+  console.warn("designRouter not loaded:", e.message);
+}
+
+try {
+  const { contentRouter } = require("./src/routes/content.js");
+  app.use("/api", contentRouter);
+  console.log("contentRouter mounted: /api/content/generate");
+} catch (e) {
+  console.warn("contentRouter not loaded:", e.message);
+  app.post("/api/content/generate", (req, res) => {
+    res.status(503).json({
+      ok: false,
+      error: "Generování textu není k dispozici (backend se nenačetl).",
+    });
   });
 }
 
-// POST /think/chat → okamžitý ACK
-app.post("/think/chat", (req, res) => {
-  const sessionId = String(req.body.sessionId || "").trim();
-  const message = String(req.body.message || "").trim();
-
-  if (!sessionId || !message) {
-    return res.status(400).json({ status: "error", error: "Missing sessionId or message" });
-  }
-
-  const requestId = memory.createRequest(sessionId);
-
-  // okamžitá odezva UI
-  res.json({ status: "accepted", requestId });
-
-  // async zpracování
-  setImmediate(async () => {
-    try {
-      const result = await runDecisionTree(sessionId, message);
-      memory.setRequestResult(sessionId, requestId, result);
-    } catch (err) {
-      memory.setRequestError(sessionId, requestId, {
-        status: "error",
-        error: err.message,
-      });
-    }
+// Historie výstupů, /api/me, /api/outputs, SEO history
+let meRouterLoaded = false;
+try {
+  const meRouter = require("./src/routes/me.js").meRouter;
+  app.use("/api", meRouter);
+  meRouterLoaded = true;
+  console.log("meRouter mounted: /api/me, /api/outputs, /api/seo/*");
+} catch (e) {
+  console.warn("meRouter not loaded:", e.message);
+  const emptyOutputs = (req, res) => res.json({ ok: true, items: [] });
+  app.get("/api/outputs", emptyOutputs);
+  app.get("/api/list", emptyOutputs);
+  app.get("/api/seo/history", emptyOutputs);
+  app.get("/api/seo/audit/list", emptyOutputs);
+  app.get("/api/me", (req, res) => {
+    res.status(401).json({ ok: false, error: "UNAUTHORIZED", message: "API key required (meRouter not loaded)" });
   });
-});
+}
 
-// polling
-app.get("/think/result", (req, res) => {
-  const { sessionId, requestId } = req.query;
+// Workspace profile (profil značky pro generování textu / design)
+try {
+  const { workspaceProfileRouter } = require("./src/routes/workspaceProfile.js");
+  app.use("/api", workspaceProfileRouter);
+  console.log("workspaceProfileRouter mounted: /api/workspace/profile");
+} catch (e) {
+  console.warn("workspaceProfileRouter not loaded:", e.message);
+}
 
-  const r = memory.getRequest(sessionId, requestId);
-  if (!r) return res.status(404).json({ status: "error", error: "Unknown request" });
+// AI Ads Studio – URL → Ads Draft (F1)
+try {
+  const { adsStudioRouter } = require("./src/routes/adsStudio.js");
+  app.use("/api", adsStudioRouter);
+  console.log("adsStudioRouter mounted: /api/ads/draft");
+} catch (e) {
+  console.warn("adsStudioRouter not loaded:", e.message);
+}
 
-  if (r.status === "pending") return res.json({ status: "pending" });
-  if (r.status === "error") return res.json({ status: "error", payload: r.payload });
-
-  return res.json({ status: "done", payload: r.payload });
-});
-
-const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`NeoBot running on port ${PORT}`);
+  console.log("Server listening on port", PORT);
 });
