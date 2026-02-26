@@ -92,13 +92,13 @@ function decideNextStep({ sessionId, message }) {
   }
 
   // === CHAT (volný) ===
-  // ✅ minimální fallback odpověď (LLM napojíme v dalších taskech)
   session.profile.lastMessage = message;
 
   return {
     action: "CHAT",
     reply: "Rozumím. Napiš mi prosím víc detailů (co je produkt/služba, komu to prodáváš a co už jsi zkusil).",
-    mode: "chat"
+    mode: "chat",
+    profile: session.profile
   };
 }
 

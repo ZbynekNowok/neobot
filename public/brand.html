@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8" />
+  <title>Profil firmy – NeoBot</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body { margin:0; background:#0b1220; font-family:system-ui,-apple-system,sans-serif; color:#e5e7eb; min-height:100vh; }
+    .app { max-width:640px; margin:0 auto; padding:24px; }
+    header { display:flex; align-items:center; gap:16px; margin-bottom:24px; border-bottom:1px solid #1e293b; padding-bottom:16px; }
+    header a { color:#94a3b8; text-decoration:none; font-size:14px; }
+    header a:hover { color:#e5e7eb; }
+    h1 { font-size:18px; margin:0; }
+    .banner { padding:12px 16px; border-radius:12px; margin-bottom:12px; }
+    .banner.error { background:#450a0a; border:1px solid #991b1b; color:#fca5a5; }
+    .form-row { margin-bottom:14px; }
+    .form-row label { display:block; color:#94a3b8; font-size:13px; margin-bottom:4px; }
+    .form-row input, .form-row textarea { width:100%; padding:10px 12px; border-radius:8px; border:1px solid #1e293b; background:#020617; color:#e5e7eb; font-size:14px; box-sizing:border-box; }
+    .form-row textarea { resize:vertical; min-height:80px; }
+    button { padding:14px 20px; border-radius:12px; border:none; font-size:14px; cursor:pointer; font-weight:600; }
+    button.primary { background:#2563eb; color:white; }
+    button.primary:hover { background:#1d4ed8; }
+    button.secondary { background:#1e293b; color:#e5e7eb; }
+    button.secondary:hover { background:#334155; }
+    .meta { font-size:13px; color:#94a3b8; margin-bottom:16px; }
+    .actions { display:flex; gap:10px; flex-wrap:wrap; margin-top:16px; }
+    .toast { margin-top:12px; padding:12px; background:#14532d; color:#86efac; border-radius:8px; display:none; }
+  </style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <a href="/">← Zpět do chatu</a>
+    <h1>Profil firmy (Brand Memory)</h1>
+  </header>
+  <p class="meta">Profil se používá v režimu Marketing chatu. Po uložení se změny projeví v nových odpovědích.</p>
+  <div id="brand-last-update" class="meta" style="display:none;">Poslední úprava: <span id="brand-updated-at"></span></div>
+  <div id="brand-banner" class="banner" style="display:none;"></div>
+  <form id="brand-form">
+    <div class="form-row"><label>Název firmy</label><input type="text" id="brand-business_name" /></div>
+    <div class="form-row"><label>Obor</label><input type="text" id="brand-industry" placeholder="např. květinářství" /></div>
+    <div class="form-row"><label>Cílová skupina</label><input type="text" id="brand-target_audience" /></div>
+    <div class="form-row"><label>Město</label><input type="text" id="brand-city" /></div>
+    <div class="form-row"><label>Tón komunikace</label><input type="text" id="brand-tone" placeholder="např. profesionální, přátelský" /></div>
+    <div class="form-row"><label>USP</label><input type="text" id="brand-usp" placeholder="Hlavní výhoda oproti konkurenci" /></div>
+    <div class="form-row"><label>Hlavní služby (jeden na řádek)</label><textarea id="brand-main_services" rows="4"></textarea></div>
+    <div class="form-row"><label>Styl CTA</label><input type="text" id="brand-cta_style" placeholder="např. Jednoduchá CTA: Objednat" /></div>
+    <div class="form-row"><label>Zakázaná slova (jeden na řádek)</label><textarea id="brand-forbidden_words" rows="3"></textarea></div>
+    <div class="actions">
+      <button type="submit" id="brand-save-btn" class="primary">Uložit profil</button>
+      <button type="button" id="brand-clear-btn" class="secondary">Vyčistit profil</button>
+    </div>
+  </form>
+  <div id="brand-toast" class="toast">Uloženo.</div>
+</div>
+<script src="js/api.js"></script>
+<script src="brand-page.js"></script>
+</body>
+</html>

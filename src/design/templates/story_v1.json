@@ -1,0 +1,84 @@
+{
+  "id": "story_v1",
+  "name": "Story v1 - 9:16",
+  "supportedFormats": ["9:16"],
+  "zones": {
+    "headline": {
+      "anchor": "center",
+      "x": "50%",
+      "y": "45%",
+      "width": "85%",
+      "align": "center"
+    },
+    "subheadline": {
+      "anchor": "center",
+      "x": "50%",
+      "y": "58%",
+      "width": "85%",
+      "align": "center"
+    },
+    "cta": {
+      "anchor": "bottom",
+      "x": "50%",
+      "y": "88%",
+      "width": "70%",
+      "align": "center",
+      "style": "button"
+    },
+    "logo": {
+      "anchor": "top-right",
+      "x": "90%",
+      "y": "6%",
+      "width": "14%",
+      "height": "6%"
+    },
+    "footer": {
+      "anchor": "bottom",
+      "x": "50%",
+      "y": "95%",
+      "width": "80%",
+      "align": "center"
+    }
+  },
+  "typography": {
+    "headline": {
+      "fontFamily": "Inter",
+      "fontWeight": "bold",
+      "fontSizeRatio": 0.065,
+      "maxLines": 2,
+      "lineHeight": 1.2,
+      "letterSpacing": -0.5
+    },
+    "subheadline": {
+      "fontFamily": "Inter",
+      "fontWeight": "normal",
+      "fontSizeRatio": 0.038,
+      "maxLines": 3,
+      "lineHeight": 1.35,
+      "letterSpacing": 0
+    },
+    "cta": {
+      "fontFamily": "Inter",
+      "fontWeight": "bold",
+      "fontSizeRatio": 0.04,
+      "maxLines": 1,
+      "lineHeight": 1.2,
+      "letterSpacing": 0
+    },
+    "footer": {
+      "fontFamily": "Inter",
+      "fontWeight": "normal",
+      "fontSizeRatio": 0.022,
+      "maxLines": 1,
+      "lineHeight": 1.2,
+      "letterSpacing": 0
+    }
+  },
+  "safeArea": {
+    "paddingPercent": 0.1
+  },
+  "bgOverlay": {
+    "type": "dim",
+    "opacity": 0.4
+  }
+}

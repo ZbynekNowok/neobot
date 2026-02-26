@@ -1,0 +1,10 @@
+project_id = "ahyjonqtjidrhibwyyol"
+
+[functions.generate-content]
+verify_jwt = false
+
+[functions.creative-flyer]
+verify_jwt = false
+
+[functions.api-proxy]
+verify_jwt = false

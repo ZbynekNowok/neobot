@@ -1,0 +1,20 @@
+{
+  "id": "promo_v2",
+  "name": "Promo v2",
+  "supportedFormats": ["1:1", "4:5", "16:9"],
+  "zones": {
+    "headline": { "anchor": "top-left", "x": "8%", "y": "25%", "width": "45%", "align": "left" },
+    "subheadline": { "anchor": "left", "x": "8%", "y": "42%", "width": "45%", "align": "left" },
+    "cta": { "anchor": "bottom-left", "x": "8%", "y": "85%", "width": "35%", "align": "left", "style": "button" },
+    "logo": { "anchor": "top-left", "x": "8%", "y": "8%", "width": "15%", "height": "8%" },
+    "footer": { "anchor": "bottom-right", "x": "92%", "y": "95%", "width": "35%", "align": "right" }
+  },
+  "typography": {
+    "headline": { "fontFamily": "Inter", "fontWeight": "bold", "fontSizeRatio": 0.072, "maxLines": 2, "lineHeight": 1.2 },
+    "subheadline": { "fontFamily": "Inter", "fontWeight": "normal", "fontSizeRatio": 0.036, "maxLines": 4, "lineHeight": 1.35 },
+    "cta": { "fontFamily": "Inter", "fontWeight": "bold", "fontSizeRatio": 0.032, "maxLines": 1, "lineHeight": 1.2 },
+    "footer": { "fontFamily": "Inter", "fontWeight": "normal", "fontSizeRatio": 0.022, "maxLines": 1, "lineHeight": 1.2 }
+  },
+  "safeArea": { "paddingPercent": 0.06 },
+  "bgOverlay": { "type": "linear", "gradient": "to_right", "stops": [{"offset": 0, "opacity": 0.55}, {"offset": 0.45, "opacity": 0.15}, {"offset": 1, "opacity": 0.1}] }
+}

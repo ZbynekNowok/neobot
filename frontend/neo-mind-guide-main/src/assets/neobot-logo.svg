@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Vektorová verze loga NeoBot co nejblíže odpovídající původnímu PNG.
+     Pozadí je průhledné; barvy a tvary vycházejí z původního loga. -->
+<svg width="800" height="290" viewBox="0 0 800 290" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Gradient bubliny -->
+    <linearGradient id="neo-bubble" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#65F0C8"/>
+      <stop offset="45%" stop-color="#52B0F5"/>
+      <stop offset="100%" stop-color="#5C6BFF"/>
+    </linearGradient>
+    <!-- Gradient písmene O -->
+    <linearGradient id="neo-o" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#65F0C8"/>
+      <stop offset="100%" stop-color="#52B0F5"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Ikona (chat bublina) -->
+  <g transform="translate(40,30)">
+    <!-- vnější tvar -->
+    <path
+      d="M80 0h120c44 0 80 36 80 80v72c0 44-36 80-80 80h-82l-38 51c-3 4-10 2-10-3v-54C28 213 0 181 0 147V80C0 36 36 0 80 0Z"
+      fill="url(#neo-bubble)"/>
+
+    <!-- vnitřní tmavá plocha (obličej) -->
+    <path
+      d="M86 38h108c15 0 28 13 28 28v72c0 15-13 28-28 28h-76l-22 30c-3 4-9 2-9-3v-20C64 167 50 152 50 134V66c0-15 13-28 28-28Z"
+      fill="#050816"/>
+
+    <!-- oči -->
+    <circle cx="118" cy="90" r="9" fill="#BFFFF0"/>
+    <circle cx="162" cy="90" r="9" fill="#BFFFF0"/>
+  </g>
+
+  <!-- Nápis NeoBot -->
+  <g transform="translate(310,190)" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+     font-weight="600" font-size="120">
+    <!-- Ne -->
+    <text x="0" y="0" fill="white">Ne</text>
+    <!-- O -->
+    <circle cx="220" cy="-82" r="54" fill="url(#neo-o)"/>
+    <text x="188" y="0" fill="white"> </text>
+    <!-- Bot -->
+    <text x="270" y="0" fill="white">Bot</text>
+  </g>
+</svg>
+

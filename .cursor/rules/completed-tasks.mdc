@@ -1,0 +1,12 @@
+---
+description: Paměť projektu – splněné úkoly v docs/completed-tasks/
+alwaysApply: true
+---
+
+# Splněné úkoly (project memory)
+
+- **Na začátku každé konverzace** (když se uživatel přihlásí / napíše do tohoto projektu): přečti si obsah složky `docs/completed-tasks/` – soubor `README.md` a všechny soubory `*.md` s úkoly – abys měl přehled, co je hotové. Ber to jako povinný první krok.
+- **Když uživatel říká, že něco „už bylo vyřešené“ nebo „to jsme dělali“:** nejdřív se podívej do složky `docs/completed-tasks/`. Každý soubor tam popisuje jeden hotový úkol (datum, co je hotové, kde v kódu to je).
+- **Když dokončíš významný úkol:** přidej nový soubor do `docs/completed-tasks/` s názvem `YYYY-MM-DD_kratky-popis.md` a stručným obsahem (co bylo uděláno, které soubory/endpointy, jak ověřit). Konvence je v `docs/completed-tasks/README.md`.
+
+Tím pádem nemusíš spoléhat na paměť mezi chaty – stav projektu je zdokumentovaný v této složce.
