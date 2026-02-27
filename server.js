@@ -48,6 +48,14 @@ try {
 }
 
 try {
+  const { imagesRouter } = require("./src/routes/images.js");
+  app.use("/api", imagesRouter);
+  console.log("imagesRouter mounted: /api/images/*");
+} catch (e) {
+  console.warn("imagesRouter not loaded:", e.message);
+}
+
+try {
   const { contentRouter } = require("./src/routes/content.js");
   app.use("/api", contentRouter);
   console.log("contentRouter mounted: /api/content/generate");
@@ -93,7 +101,7 @@ try {
 try {
   const { adsStudioRouter } = require("./src/routes/adsStudio.js");
   app.use("/api", adsStudioRouter);
-  console.log("adsStudioRouter mounted: /api/ads/draft, /api/ads/images");
+  console.log("adsStudioRouter mounted: /api/ads/draft, /api/ads/images, /api/ads/product-variants");
 } catch (e) {
   console.warn("adsStudioRouter not loaded:", e.message);
 }

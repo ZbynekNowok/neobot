@@ -66,7 +66,16 @@ function buildNegativePrompt() {
 }
 
 async function generateBackground(params) {
-  const { prompt, negativePrompt, width, height, jobId } = params;
+  const {
+    prompt,
+    negativePrompt,
+    width,
+    height,
+    jobId,
+    outputWidth,
+    outputHeight,
+    resolution,
+  } = params || {};
   if (!prompt || !jobId) throw new Error("Prompt and jobId required");
   const apiToken = process.env.REPLICATE_API_TOKEN;
   if (!apiToken) throw new Error("REPLICATE_API_TOKEN not set");
@@ -77,11 +86,13 @@ async function generateBackground(params) {
     : "text, letters, words, watermark, logo, typography, caption, signage, nsfw, nude, explicit";
 
   const replicate = new Replicate({ auth: apiToken });
+  const generateWidth = width || 1024;
+  const generateHeight = height || 1024;
   const input = {
     prompt: enhancedPrompt,
     negative_prompt: enhancedNegativePrompt,
-    width: width || 1024,
-    height: height || 1024,
+    width: generateWidth,
+    height: generateHeight,
     num_outputs: 1,
     num_inference_steps: 30,
     guidance_scale: 7.5,
@@ -126,8 +137,8 @@ async function generateBackground(params) {
     throw new Error(`Failed to download image: ${e.message}`);
   }
 
-  const targetWidth = input.width || 1024;
-  const targetHeight = input.height || 1024;
+  const targetWidth = outputWidth || generateWidth;
+  const targetHeight = outputHeight || generateHeight;
   const resizedBuffer = await sharp(imageBuffer)
     .resize(targetWidth, targetHeight, { fit: "cover", position: "center" })
     .png()
@@ -144,11 +155,114 @@ async function generateBackground(params) {
     height: targetHeight,
     model: MODEL_ID,
     steps: input.num_inference_steps,
+    resolution: resolution || undefined,
+  };
+}
+
+/**
+ * Image-to-image: generuje reklamní obrázek s použitím vstupního obrázku (produkt) jako reference.
+ * Replicate SDXL parametr: image (URL vstupního obrázku), prompt_strength (0.7 = zachovat produkt).
+ * @param {{ imageUrl: string, prompt: string, negativePrompt?: string, width: number, height: number, jobId: string, promptStrength?: number, outputWidth?: number, outputHeight?: number, resolution?: string }}
+ * @returns {{ publicUrl: string, width: number, height: number, resolution?: string }}
+ */
+async function generateFromImage(params) {
+  const {
+    imageUrl,
+    prompt,
+    negativePrompt,
+    width,
+    height,
+    jobId,
+    promptStrength = 0.7,
+    outputWidth,
+    outputHeight,
+    resolution,
+  } = params || {};
+  if (!imageUrl || !prompt || !jobId) throw new Error("imageUrl, prompt and jobId required");
+  const apiToken = process.env.REPLICATE_API_TOKEN;
+  if (!apiToken) throw new Error("REPLICATE_API_TOKEN not set");
+
+  const enhancedPrompt = `${prompt}, no text, no letters, no logo, no watermark, professional, family friendly`;
+  const enhancedNegativePrompt = negativePrompt
+    ? `${negativePrompt}, text, letters, words, watermark, logo, typography, caption, signage, nsfw, nude, explicit`
+    : "text, letters, words, watermark, logo, typography, caption, signage, nsfw, nude, explicit";
+
+  const replicate = new Replicate({ auth: apiToken });
+  const generateWidth = width || 1024;
+  const generateHeight = height || 1024;
+  const input = {
+    prompt: enhancedPrompt,
+    negative_prompt: enhancedNegativePrompt,
+    image: imageUrl,
+    prompt_strength: Math.min(1, Math.max(0.1, promptStrength)),
+    width: generateWidth,
+    height: generateHeight,
+    num_outputs: 1,
+    num_inference_steps: 30,
+    guidance_scale: 7.5,
+    seed: Math.floor(Math.random() * 2147483647),
+  };
+
+  const DEFAULT_RATE_LIMIT_RETRY_AFTER = 30;
+  function parseRetryAfterFromMessage(message) {
+    if (!message || typeof message !== "string") return DEFAULT_RATE_LIMIT_RETRY_AFTER;
+    const match = message.match(/"retry_after"\s*:\s*(\d+)/);
+    if (match) return Math.min(300, Math.max(1, parseInt(match[1], 10)));
+    return DEFAULT_RATE_LIMIT_RETRY_AFTER;
+  }
+
+  let output;
+  try {
+    const p = replicate.run(MODEL_ID, { input });
+    const t = new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), GENERATION_TIMEOUT_MS));
+    output = await Promise.race([p, t]);
+  } catch (e) {
+    const msg = e?.message || "";
+    if (msg.includes("timeout")) throw new Error("Image generation timeout after 120 seconds");
+    if (msg.includes("429") || msg.includes("Too Many Requests")) {
+      const err = new Error("Replicate rate limit (429). Zkuste později.");
+      err.code = "RATE_LIMITED";
+      err.provider = "replicate";
+      err.retryAfterSeconds = parseRetryAfterFromMessage(msg);
+      throw err;
+    }
+    throw new Error(`Replicate generation failed: ${msg}`);
+  }
+  if (!output || !Array.isArray(output) || output.length === 0) throw new Error("Replicate returned no output");
+  const outImageUrl = output[0];
+
+  let imageBuffer;
+  try {
+    const res = await fetch(outImageUrl);
+    if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+    imageBuffer = Buffer.from(await res.arrayBuffer());
+  } catch (e) {
+    throw new Error(`Failed to download image: ${e.message}`);
+  }
+
+  const targetWidth = outputWidth || generateWidth;
+  const targetHeight = outputHeight || generateHeight;
+  const resizedBuffer = await sharp(imageBuffer)
+    .resize(targetWidth, targetHeight, { fit: "cover", position: "center" })
+    .png()
+    .toBuffer();
+
+  const outputsDir = path.join(__dirname, "../../public/outputs/product-ads");
+  fs.mkdirSync(outputsDir, { recursive: true });
+  const filePath = path.join(outputsDir, `${jobId}.png`);
+  fs.writeFileSync(filePath, resizedBuffer);
+
+  return {
+    publicUrl: `/outputs/product-ads/${jobId}.png`,
+    width: targetWidth,
+    height: targetHeight,
+    resolution: resolution || undefined,
   };
 }
 
 module.exports = {
   generateBackground,
+  generateFromImage,
   buildPrompt,
   buildNegativePrompt,
   MODEL_ID,

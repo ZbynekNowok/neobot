@@ -63,6 +63,13 @@ interface ImageOutputData {
   sections: ImageSection[];
 }
 
+interface ComposeState {
+  backgroundUrl: string | null;
+  layers: any[] | null;
+  format: "square" | "story" | "landscape";
+  resolution: "preview" | "standard" | "high";
+}
+
 // Each function now has a defaultFormat derived from type
 const functionCategories: FunctionCategory[] = [
   {
@@ -187,6 +194,7 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
   
   // Output data
   const [imageOutput, setImageOutput] = useState<ImageOutputData | null>(null);
+  const [composeState, setComposeState] = useState<ComposeState | null>(null);
   const { taskContext, saveOutputToTask, isSavingToTask, savedToTask, navigateBackToTask } = useTaskOutputSaver();
 
   // Reset to step 1 on mount if no task context
@@ -994,6 +1002,11 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
             <Button variant="ghost" onClick={handleNewImage}>Nový vizuál</Button>
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+>
       )}
     </div>
   );

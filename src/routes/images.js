@@ -1,11 +1,16 @@
 const express = require("express");
 const { addJob } = require("../queue/jobQueue.js");
+const {
+  composeImageWithText,
+  renderCompositeOnly,
+  getCanvasDimensions,
+} = require("../marketing/imageCompose.js");
 
 const imagesRouter = express.Router();
 
 /**
  * POST /api/images/background
- * Generate background image using Replicate SDXL
+ * (legacy) Generate background image using Replicate SDXL via job queue.
  */
 imagesRouter.post("/images/background", async (req, res) => {
   const {
@@ -54,7 +59,6 @@ imagesRouter.post("/images/background", async (req, res) => {
   }
 
   try {
-    // Create job
     const job = await addJob("image_background", {
       category: category || "social",
       platform: platform || "instagram",
@@ -79,4 +83,292 @@ imagesRouter.post("/images/background", async (req, res) => {
   }
 });
 
+function normalizeResolution(raw) {
+  if (!raw || typeof raw !== "string") return "standard";
+  if (["preview", "standard", "high"].includes(raw)) return raw;
+  return "standard";
+}
+
+function normalizeFormat(raw) {
+  if (!raw || typeof raw !== "string") return "square";
+  if (["square", "story", "landscape"].includes(raw)) return raw;
+  return "square";
+}
+
+function isHexColor(val) {
+  return typeof val === "string" && /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(val);
+}
+
+function validateAndNormalizeLayers(layers, canvasWidth, canvasHeight) {
+  if (!Array.isArray(layers)) throw new Error("layers must be array");
+  if (layers.length > 10) throw new Error("Too many layers (max 10)");
+
+  const safeLayers = [];
+
+  for (const raw of layers) {
+    if (!raw || typeof raw.type !== "string") continue;
+    const type = raw.type;
+
+    if (type === "gradient") {
+      let strength = Number(raw.strength);
+      if (!Number.isFinite(strength)) strength = 0.55;
+      strength = Math.min(1, Math.max(0, strength));
+      safeLayers.push({
+        type: "gradient",
+        direction: raw.direction === "top" ? "top" : "bottom",
+        strength,
+      });
+    } else if (type === "text") {
+      if (!raw.id || typeof raw.id !== "string") {
+        throw new Error("text layer requires id");
+      }
+      const text = String(raw.text || "").trim();
+      const id = raw.id;
+      const maxHeadlineLen = 80;
+      const maxSubheadlineLen = 140;
+      const maxCtaLen = 24;
+      let maxLen = 140;
+      if (id === "headline") maxLen = maxHeadlineLen;
+      else if (id === "subheadline") maxLen = maxSubheadlineLen;
+      else if (id === "cta") maxLen = maxCtaLen;
+      const clippedText = text.slice(0, maxLen);
+
+      let fontSize = Number(raw.fontSize || 40);
+      if (!Number.isFinite(fontSize)) fontSize = 40;
+      fontSize = Math.min(140, Math.max(12, fontSize));
+
+      let fontWeight = Number(raw.fontWeight || 600);
+      if (!Number.isFinite(fontWeight)) fontWeight = 600;
+      fontWeight = Math.min(900, Math.max(300, fontWeight));
+
+      const align = ["left", "center", "right"].includes(raw.align)
+        ? raw.align
+        : "left";
+
+      let maxWidthPct = Number(raw.maxWidthPct || 0.8);
+      if (!Number.isFinite(maxWidthPct)) maxWidthPct = 0.8;
+      maxWidthPct = Math.min(0.95, Math.max(0.3, maxWidthPct));
+
+      let x = Number(raw.x || 80);
+      let y = Number(raw.y || canvasHeight * 0.7);
+      if (!Number.isFinite(x)) x = 80;
+      if (!Number.isFinite(y)) y = canvasHeight * 0.7;
+      x = Math.min(canvasWidth, Math.max(0, x));
+      y = Math.min(canvasHeight, Math.max(0, y));
+
+      const color = isHexColor(raw.color) ? raw.color : "#ffffff";
+
+      safeLayers.push({
+        type: "text",
+        id,
+        text: clippedText,
+        x,
+        y,
+        fontSize,
+        fontWeight,
+        color,
+        align,
+        maxWidthPct,
+      });
+    } else if (type === "button") {
+      if (!raw.id || typeof raw.id !== "string") {
+        throw new Error("button layer requires id");
+      }
+      const text = String(raw.text || "").trim().slice(0, 32);
+
+      let x = Number(raw.x || 80);
+      let y = Number(raw.y || canvasHeight * 0.8);
+      if (!Number.isFinite(x)) x = 80;
+      if (!Number.isFinite(y)) y = canvasHeight * 0.8;
+
+      let w = Number(raw.w || 260);
+      let h = Number(raw.h || 56);
+      if (!Number.isFinite(w)) w = 260;
+      if (!Number.isFinite(h)) h = 56;
+      w = Math.min(900, Math.max(120, w));
+      h = Math.min(220, Math.max(40, h));
+
+      if (x + w > canvasWidth) x = canvasWidth - w - 16;
+      if (y + h > canvasHeight) y = canvasHeight - h - 16;
+      if (x < 0) x = 0;
+      if (y < 0) y = 0;
+
+      const bg = isHexColor(raw.bg) ? raw.bg : "#2563eb";
+      const color = isHexColor(raw.color) ? raw.color : "#ffffff";
+      let radius = Number(raw.radius ?? 999);
+      if (!Number.isFinite(radius)) radius = 999;
+      radius = Math.min(999, Math.max(0, radius));
+
+      safeLayers.push({
+        type: "button",
+        id: raw.id,
+        text,
+        x,
+        y,
+        w,
+        h,
+        bg,
+        color,
+        radius,
+      });
+    }
+  }
+
+  return safeLayers;
+}
+
+/**
+ * Compose background + text + layout into final PNG.
+ */
+imagesRouter.post("/images/compose", async (req, res) => {
+  const body = req.body || {};
+  const type = body.type;
+  const format = normalizeFormat(body.format);
+  const resolution = normalizeResolution(body.resolution);
+  const style = body.style;
+  const purpose = body.purpose;
+  const palette = body.palette;
+  const prompt = body.prompt;
+  const brand = body.brand && typeof body.brand === "object" ? body.brand : {};
+  const backgroundOnly = Boolean(body.backgroundOnly);
+
+  if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
+    return res.status(400).json({
+      ok: false,
+      error: "INVALID_PARAMS",
+      message: "Pole prompt je povinné.",
+    });
+  }
+
+  try {
+    const result = await composeImageWithText(
+      {
+        type,
+        format,
+        resolution,
+        style,
+        purpose,
+        palette,
+        prompt: prompt.trim(),
+        brand,
+        backgroundOnly,
+      },
+      req.id || `compose-${Date.now()}`
+    );
+
+    if (backgroundOnly) {
+      return res.json({
+        ok: true,
+        background: result.background,
+      });
+    }
+
+    return res.json({
+      ok: true,
+      background: result.background,
+      texts: result.texts,
+      composite: result.composite,
+      layers: result.layers,
+      format: result.format,
+      resolution: result.resolution,
+    });
+  } catch (err) {
+    if (err?.code === "RATE_LIMITED") {
+      return res.status(429).json({
+        ok: false,
+        error: "RATE_LIMITED",
+        provider: "replicate",
+        message: "Replicate rate limit. Zkuste později.",
+      });
+    }
+    if (err?.code === "LLM_UNAVAILABLE" || err?.httpStatus === 503) {
+      return res.status(503).json({
+        ok: false,
+        error: "LLM_UNAVAILABLE",
+        message: "Služba pro generování textu nebo layoutu není k dispozici.",
+      });
+    }
+    console.error("[POST /api/images/compose]", err);
+    return res.status(500).json({
+      ok: false,
+      error: "INTERNAL_ERROR",
+      message: err?.message || "Generování grafiky s textem selhalo.",
+    });
+  }
+});
+
+/**
+ * POST /api/images/compose/render
+ * Re-render composite PNG from existing background + layers (no new background/LLM).
+ */
+imagesRouter.post("/images/compose/render", async (req, res) => {
+  const body = req.body || {};
+  const backgroundUrl = body.backgroundUrl;
+  const format = normalizeFormat(body.format);
+  const resolution = normalizeResolution(body.resolution);
+  const layers = body.layers;
+
+  if (!backgroundUrl || typeof backgroundUrl !== "string") {
+    return res.status(400).json({
+      ok: false,
+      error: "INVALID_PARAMS",
+      message: "backgroundUrl je povinný.",
+    });
+  }
+
+  let dims;
+  try {
+    dims = getCanvasDimensions(format, resolution);
+  } catch {
+    return res.status(400).json({
+      ok: false,
+      error: "INVALID_PARAMS",
+      message: "Neplatný formát nebo rozlišení.",
+    });
+  }
+
+  let safeLayers;
+  try {
+    safeLayers = validateAndNormalizeLayers(
+      layers,
+      dims.outputWidth,
+      dims.outputHeight
+    );
+  } catch (err) {
+    return res.status(400).json({
+      ok: false,
+      error: "INVALID_LAYERS",
+      message: err?.message || "Neplatné vrstvy pro canvas renderer.",
+    });
+  }
+
+  try {
+    const result = await renderCompositeOnly(
+      {
+        backgroundUrl,
+        format,
+        resolution,
+        layers: safeLayers,
+      },
+      req.id || `compose-${Date.now()}`
+    );
+
+    return res.json({
+      ok: true,
+      composite: result.composite,
+      layers: result.layers,
+      format: result.format,
+      resolution: result.resolution,
+    });
+  } catch (err) {
+    console.error("[POST /api/images/compose/render]", err);
+    return res.status(500).json({
+      ok: false,
+      error: "RENDER_FAILED",
+      message: err?.message || "Přerenderování grafiky selhalo.",
+    });
+  }
+});
+
 module.exports = { imagesRouter };
+
