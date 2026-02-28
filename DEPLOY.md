@@ -46,10 +46,14 @@ Expected: `HTTP/1.1 204 No Content` with headers:
 - Test: `sudo nginx -t`
 - Reload: `sudo systemctl reload nginx`
 
-### 3. Frontend (Lovable)
+### 3. Frontend (Lovable / Vite)
 - Frontend files in `public/` are served by Lovable
 - API client uses `window.__NEOBOT_API__ || "https://api.neobot.cz"`
 - All API calls use `/api/*` prefix
+
+**Stav „API Offline“ v aplikaci:** Dashboard volá health přes Supabase Edge Function `api-proxy` (ta volá `EXTERNAL_API_URL`, default `https://api.neobot.cz`). Pokud testuješ proti jinému backendu (např. vlastní VPS), nastav ve frontendu v `.env`:  
+`VITE_API_HEALTH_URL=https://api.neobot.cz/health`  
+(nebo např. `http://37.46.208.176:3000/health` pro přímý test). Pak se stav API kontroluje na tuto URL a indikátor se zobrazí správně.
 
 ## API Endpoints
 

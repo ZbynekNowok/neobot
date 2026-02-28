@@ -231,6 +231,11 @@ imagesRouter.post("/images/compose", async (req, res) => {
   const prompt = body.prompt;
   const brand = body.brand && typeof body.brand === "object" ? body.brand : {};
   const backgroundOnly = Boolean(body.backgroundOnly);
+  const textLayout = body.textLayout && ["flyer", "balanced", "visual"].includes(body.textLayout) ? body.textLayout : "flyer";
+  const textPlacement =
+    body.textPlacement && ["bottom_left", "bottom_center", "top_left", "top_center", "center", "right_panel", "auto"].includes(body.textPlacement)
+      ? body.textPlacement
+      : "bottom_left";
 
   if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
     return res.status(400).json({
@@ -241,6 +246,9 @@ imagesRouter.post("/images/compose", async (req, res) => {
   }
 
   try {
+    const isDev = process.env.NODE_ENV !== "production";
+    const debugPrompt = req.query?.debug === "1" && isDev;
+
     const result = await composeImageWithText(
       {
         type,
@@ -252,18 +260,20 @@ imagesRouter.post("/images/compose", async (req, res) => {
         prompt: prompt.trim(),
         brand,
         backgroundOnly,
+        textLayout,
+        textPlacement,
+        debug: debugPrompt,
       },
       req.id || `compose-${Date.now()}`
     );
 
     if (backgroundOnly) {
-      return res.json({
-        ok: true,
-        background: result.background,
-      });
+      const json = { ok: true, background: result.background };
+      if (result._debug) json._debug = result._debug;
+      return res.json(json);
     }
 
-    return res.json({
+    const json = {
       ok: true,
       background: result.background,
       texts: result.texts,
@@ -271,7 +281,9 @@ imagesRouter.post("/images/compose", async (req, res) => {
       layers: result.layers,
       format: result.format,
       resolution: result.resolution,
-    });
+    };
+    if (result._debug) json._debug = result._debug;
+    return res.json(json);
   } catch (err) {
     if (err?.code === "RATE_LIMITED") {
       return res.status(429).json({

@@ -5,6 +5,7 @@ const { fetch } = require("undici");
 const cheerio = require("cheerio");
 const { llmChat } = require("../llm/llmGateway.js");
 const { generateBackground, generateFromImage, buildNegativePrompt } = require("../imageProviders/replicate.js");
+const { detectIndustry } = require("./imageCompose.js");
 
 const FETCH_TIMEOUT_MS = 15000;
 const MAX_PROMPT_CHARS = 12000;
@@ -375,7 +376,8 @@ Přesně ${count} položek v items.`;
     throw new Error("Neplatný JSON pro image prompts");
   }
 
-  const negativePrompt = buildNegativePrompt();
+  const industry = detectIndustry(brand.description || brand.name || "");
+  const clientProfile = { industry, brandName: brand.name || null };
   const formatsToGenerate = []; // { format: "square"|"story", index }
   if (format === "both") {
     const half = Math.floor(count / 2);
@@ -404,8 +406,11 @@ Přesně ${count} položek v items.`;
       try {
         result = await Promise.race([
           generateBackground({
-            prompt: promptText,
-            negativePrompt,
+            clientProfile,
+            campaignPrompt: promptText,
+            industry,
+            imageMode: "ads",
+            variationKey: `${requestId}-${i}`,
             width: generateWidth,
             height: generateHeight,
             outputWidth,
@@ -505,7 +510,8 @@ Přesně ${variants} položek v items.`;
     throw new Error("Neplatný JSON pro product scenes");
   }
 
-  const negativePrompt = buildNegativePrompt();
+  const industry = detectIndustry(productName || productContext || "");
+  const clientProfile = { industry, brandName: null };
   const formatsToGenerate = [];
   if (format === "both") {
     const half = Math.floor(variants / 2);
@@ -537,7 +543,9 @@ Přesně ${variants} položek v items.`;
           generateFromImage({
             imageUrl: publicImageUrl,
             prompt: promptText,
-            negativePrompt,
+            clientProfile,
+            industry,
+            variationKey: `${requestId}-${i}`,
             width: generateWidth,
             height: generateHeight,
             outputWidth,

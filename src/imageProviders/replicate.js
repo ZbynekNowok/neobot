@@ -3,6 +3,7 @@ const fetch = require("node-fetch");
 const fs = require("fs");
 const path = require("path");
 const sharp = require("sharp");
+const { buildMasterImagePrompt, buildMasterNegativePrompt } = require("../marketing/masterPromptBuilder.js");
 
 const MODEL_ID = "stability-ai/sdxl:39ed52f2a78e934b3ba6e2a89f5b1c712de7dfea535525255b1aa35c5565e08b";
 const GENERATION_TIMEOUT_MS = 120000;
@@ -28,61 +29,85 @@ function getSceneFromIndustry(industry) {
   return "marketing visual, professional";
 }
 
+/** Legacy buildPrompt for design.js route; prefer master builder for new code. */
 function buildPrompt(params) {
   const { industry, style, purpose, palette, description, brand } = params;
-  let promptParts = [];
-  if (description) promptParts.push(description);
-  const scene = getSceneFromIndustry(industry);
-  if (scene) promptParts.push(scene);
-  if (industry && !scene) promptParts.push(`context: ${industry}`);
-  const styleMap = {
-    minimal: "minimalist, clean, simple",
-    luxury: "luxury, premium, elegant, sophisticated",
-    playful: "playful, vibrant, fun, energetic",
-    natural: "natural, organic, authentic, earthy",
+  const clientProfile = {
+    industry: industry || "general",
+    brandName: brand?.name,
+    colors: brand?.primary ? [brand.primary] : null,
   };
-  if (style && styleMap[style]) promptParts.push(styleMap[style]);
-  const purposeMap = {
-    sale: "promotional, commercial",
-    brand: "brand identity, professional",
-    engagement: "engaging, social media friendly",
-    education: "informative, clear, educational",
-  };
-  if (purpose && purposeMap[purpose]) promptParts.push(purposeMap[purpose]);
-  const paletteMap = {
-    neutral: "neutral colors, beige, gray, white",
-    warm: "warm colors, orange, yellow, red tones",
-    cool: "cool colors, blue, green, purple tones",
-    bold: "bold colors, high contrast, vibrant",
-  };
-  if (palette && paletteMap[palette]) promptParts.push(paletteMap[palette]);
-  if (brand && brand.primary) promptParts.push(`accent color ${brand.primary}`);
-  promptParts.push("NO TEXT, NO LOGO, NO WATERMARK, leave negative space for typography");
-  return promptParts.join(", ");
+  return buildMasterImagePrompt({
+    clientProfile,
+    campaignPrompt: description || "",
+    industry: industry || "general",
+    imageMode: "ads",
+    variationKey: `design-${Date.now()}`,
+  });
 }
 
-function buildNegativePrompt() {
-  return "text, letters, words, logo, watermark, typography, caption, signage";
+/** Legacy; master negative is used when using buildMasterImagePrompt. */
+function buildNegativePrompt(industryOrOpts) {
+  const opts = typeof industryOrOpts === "string"
+    ? { industry: industryOrOpts }
+    : (industryOrOpts && typeof industryOrOpts === "object" ? industryOrOpts : {});
+  return buildMasterNegativePrompt(opts);
 }
 
 async function generateBackground(params) {
   const {
-    prompt,
-    negativePrompt,
+    prompt: legacyPrompt,
+    negativePrompt: legacyNegative,
     width,
     height,
     jobId,
     outputWidth,
     outputHeight,
     resolution,
+    clientProfile,
+    campaignPrompt,
+    industry,
+    imageMode,
+    variationKey,
+    placementHint,
+    textLayout,
   } = params || {};
-  if (!prompt || !jobId) throw new Error("Prompt and jobId required");
+
+  const useMaster =
+    campaignPrompt != null || (clientProfile && typeof clientProfile === "object") || (industry && typeof industry === "string");
+  let prompt;
+  let negativePrompt;
+  if (useMaster) {
+    const profile = clientProfile && typeof clientProfile === "object"
+      ? clientProfile
+      : { industry: industry || "general" };
+    prompt = buildMasterImagePrompt({
+      clientProfile: profile,
+      campaignPrompt: campaignPrompt != null ? String(campaignPrompt) : legacyPrompt || "",
+      industry: industry || profile.industry,
+      imageMode: imageMode || "background",
+      variationKey: variationKey || jobId,
+      placementHint: placementHint || null,
+    });
+    negativePrompt = buildMasterNegativePrompt({
+      clientProfile: profile,
+      industry: industry || profile.industry,
+      imageMode: imageMode || "background",
+      textLayout: textLayout || null,
+    });
+  } else {
+    if (!legacyPrompt || !jobId) throw new Error("Prompt and jobId required");
+    prompt = legacyPrompt;
+    negativePrompt = legacyNegative;
+  }
+
+  if (!jobId) throw new Error("jobId required");
   const apiToken = process.env.REPLICATE_API_TOKEN;
   if (!apiToken) throw new Error("REPLICATE_API_TOKEN not set");
 
-  const enhancedPrompt = `${prompt}, no text, no letters, no logo, no watermark, leave clean negative space for typography, safe for work, professional, family friendly`;
+  const enhancedPrompt = `${prompt}, safe for work, professional, family friendly`;
   const enhancedNegativePrompt = negativePrompt
-    ? `${negativePrompt}, text, letters, words, watermark, logo, typography, caption, signage, nsfw, nude, explicit`
+    ? `${negativePrompt}, nsfw, nude, explicit`
     : "text, letters, words, watermark, logo, typography, caption, signage, nsfw, nude, explicit";
 
   const replicate = new Replicate({ auth: apiToken });
@@ -178,13 +203,36 @@ async function generateFromImage(params) {
     outputHeight,
     resolution,
   } = params || {};
-  if (!imageUrl || !prompt || !jobId) throw new Error("imageUrl, prompt and jobId required");
+  if (!imageUrl || !jobId) throw new Error("imageUrl and jobId required");
   const apiToken = process.env.REPLICATE_API_TOKEN;
   if (!apiToken) throw new Error("REPLICATE_API_TOKEN not set");
 
-  const enhancedPrompt = `${prompt}, no text, no letters, no logo, no watermark, professional, family friendly`;
-  const enhancedNegativePrompt = negativePrompt
-    ? `${negativePrompt}, text, letters, words, watermark, logo, typography, caption, signage, nsfw, nude, explicit`
+  const useMaster =
+    (params.clientProfile && typeof params.clientProfile === "object") || (params.industry && typeof params.industry === "string");
+  let finalPrompt = prompt;
+  let finalNegative = negativePrompt;
+  if (useMaster) {
+    const profile = params.clientProfile && typeof params.clientProfile === "object"
+      ? params.clientProfile
+      : { industry: params.industry || "general" };
+    finalPrompt = buildMasterImagePrompt({
+      clientProfile: profile,
+      campaignPrompt: prompt || "Professional product in scene",
+      industry: params.industry || profile.industry,
+      imageMode: "img2img",
+      variationKey: params.variationKey || jobId,
+    });
+    finalNegative = buildMasterNegativePrompt({
+      clientProfile: profile,
+      industry: params.industry || profile.industry,
+      imageMode: "img2img",
+    });
+  }
+  if (!finalPrompt) throw new Error("prompt required");
+
+  const enhancedPrompt = `${finalPrompt}, professional, family friendly`;
+  const enhancedNegativePrompt = finalNegative
+    ? `${finalNegative}, nsfw, nude, explicit`
     : "text, letters, words, watermark, logo, typography, caption, signage, nsfw, nude, explicit";
 
   const replicate = new Replicate({ auth: apiToken });

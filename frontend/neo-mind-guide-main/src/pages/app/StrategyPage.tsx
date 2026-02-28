@@ -138,9 +138,14 @@ function StrategySection({
 }
 
 export default function StrategyPage() {
-  const { profile: initialProfile } = useOutletContext<{ profile: UserProfile | null }>();
+  const { profile: initialProfile, refreshProfile } = useOutletContext<{ profile: UserProfile | null; refreshProfile?: () => Promise<void> }>();
   const [profile, setProfile] = useState<UserProfile | null>(initialProfile);
   const [isSaving, setIsSaving] = useState<string | null>(null);
+
+  // Držet profil v syncu s kontextem (např. po nahrání loga na Dashboard), aby uložení nepřepsalo nové logo starou hodnotou
+  useEffect(() => {
+    setProfile(initialProfile ?? null);
+  }, [initialProfile]);
 
   // Form states for each section
   const [brandForm, setBrandForm] = useState({
@@ -153,6 +158,7 @@ export default function StrategyPage() {
     brand_logo_url: "" as string | null,
   });
   const logoInputRef = useRef<HTMLInputElement>(null);
+  const [logoCacheBuster, setLogoCacheBuster] = useState(0);
 
   const [goalsForm, setGoalsForm] = useState({
     marketing_goal: [] as string[],
@@ -230,6 +236,7 @@ export default function StrategyPage() {
       if (nextProfile) {
         syncWorkspaceProfileFromSupabaseProfile(nextProfile).catch(() => {});
       }
+      await refreshProfile?.();
       toast.success("Uloženo");
     } catch (e) {
       console.error("Failed to save:", e);
@@ -329,9 +336,36 @@ export default function StrategyPage() {
                     return;
                   }
                   const { data: urlData } = supabase.storage.from("brand-logos").getPublicUrl(path);
-                  setBrandForm(prev => ({ ...prev, brand_logo_url: urlData.publicUrl }));
+                  const newLogoUrl = urlData.publicUrl;
+                  setBrandForm(prev => ({ ...prev, brand_logo_url: newLogoUrl }));
+                  try {
+                    let { data: updatedRow, error: updateError } = await supabase
+                      .from("profiles")
+                      .update({ brand_logo_url: newLogoUrl })
+                      .eq("id", session.user.id)
+                      .select("brand_logo_url")
+                      .maybeSingle();
+                    if (!updateError && !updatedRow) {
+                      const { data: upserted, error: upsertErr } = await supabase
+                        .from("profiles")
+                        .upsert({ id: session.user.id, name: session.user.user_metadata?.name ?? null, brand_logo_url: newLogoUrl }, { onConflict: "id" })
+                        .select("brand_logo_url")
+                        .single();
+                      updateError = upsertErr;
+                      updatedRow = upserted;
+                    }
+                    if (updateError) throw updateError;
+                    const nextProfile = profile ? { ...profile, brand_logo_url: newLogoUrl } : null;
+                    setProfile(nextProfile);
+                    await syncWorkspaceProfileFromSupabaseProfile(nextProfile);
+                    await refreshProfile?.({ brand_logo_url: newLogoUrl });
+                    setLogoCacheBuster((v) => v + 1);
+                    toast.success("Logo nahráno a uloženo");
+                  } catch (err) {
+                    console.error("Profile update error:", err);
+                    toast.error("Logo se nahrálo, ale nepodařilo se uložit do profilu. Zkus znovu nebo klikni Uložit.");
+                  }
                   if (logoInputRef.current) logoInputRef.current.value = "";
-                  toast.success("Logo nahráno");
                 }}
               />
               <div
@@ -345,13 +379,30 @@ export default function StrategyPage() {
                 {brandForm.brand_logo_url ? (
                   <>
                     <img
-                      src={brandForm.brand_logo_url}
+                      src={brandForm.brand_logo_url + (logoCacheBuster ? `?v=${logoCacheBuster}` : "")}
                       alt="Firemní logo"
                       className="max-w-full max-h-[180px] sm:max-h-[220px] w-auto h-auto object-contain p-4"
                     />
                     <button
                       type="button"
-                      onClick={(e) => { e.stopPropagation(); setBrandForm(prev => ({ ...prev, brand_logo_url: null })); }}
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        setBrandForm(prev => ({ ...prev, brand_logo_url: null }));
+                        const { data: { session } } = await supabase.auth.getSession();
+                        if (session) {
+                          try {
+                            const { error } = await supabase.from("profiles").update({ brand_logo_url: null }).eq("id", session.user.id);
+                            if (!error) {
+                              setProfile(prev => prev ? { ...prev, brand_logo_url: null } : null);
+                              syncWorkspaceProfileFromSupabaseProfile(profile ? { ...profile, brand_logo_url: null } : null).catch(() => {});
+                              await refreshProfile?.({ brand_logo_url: null });
+                              toast.success("Logo odstraněno");
+                            } else toast.error("Nepodařilo se odstranit logo");
+                          } catch {
+                            toast.error("Nepodařilo se odstranit logo");
+                          }
+                        }
+                      }}
                       className="absolute top-2 right-2 rounded-full bg-destructive text-destructive-foreground p-1.5 opacity-80 hover:opacity-100 shadow"
                       title="Odstranit logo"
                     >
@@ -369,7 +420,7 @@ export default function StrategyPage() {
                   </div>
                 )}
               </div>
-              <p className="text-xs text-muted-foreground">Zobrazí se v profilu a na vygenerovaných grafikách. Nezapomeň po nahrání kliknout na „Uložit“ níže.</p>
+              <p className="text-xs text-muted-foreground">Zobrazí se v profilu a na vygenerovaných grafikách. Po nahrání se logo hned uloží.</p>
             </div>
             <div className="grid sm:grid-cols-2 gap-4">
               <div className="space-y-2">

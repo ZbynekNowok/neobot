@@ -31,6 +31,8 @@ export default function DashboardPage() {
   const { profile, refreshProfile } = useOutletContext<{ profile: UserProfile | null; refreshProfile?: () => Promise<void> }>();
   const logoInputRef = useRef<HTMLInputElement>(null);
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
+  /** Po nahrání nového loga měníme toto, aby prohlížeč načetl nový obrázek (stejná URL = cache). */
+  const [logoCacheBuster, setLogoCacheBuster] = useState(0);
   const [todayTasks, setTodayTasks] = useState<TodayTask[]>([]);
   const [upcomingTasks, setUpcomingTasks] = useState<UpcomingTask[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -49,8 +51,15 @@ export default function DashboardPage() {
   }, []);
 
   const checkApiHealth = async () => {
+    const directHealthUrl = import.meta.env.VITE_API_HEALTH_URL;
     try {
-      await apiGet("/health");
+      if (directHealthUrl) {
+        const url = directHealthUrl.startsWith("http") ? directHealthUrl : `${window.location.origin}${directHealthUrl}`;
+        const res = await fetch(url, { method: "GET" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      } else {
+        await apiGet("/health");
+      }
       setApiStatus("online");
     } catch (err: any) {
       setApiStatus("offline");
@@ -110,8 +119,17 @@ export default function DashboardPage() {
 
       {/* Dva boxy vedle sebe: 1) Logo + firemní název  2) Úkoly na dnes */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
-        {/* Box 1: Logo + firemní název – klik na logo nebo tlačítko = nahrát logo přímo */}
-        <div className="glass rounded-xl p-6 flex flex-col justify-center min-h-[260px]">
+        {/* Box 1: Logo přes celé okno, tlačítko vpravo nahoře */}
+        <div className="glass rounded-xl p-4 min-h-[260px] relative overflow-hidden">
+          <Link
+            to="/app/strategie"
+            className="absolute top-3 right-3 z-10 shrink-0"
+          >
+            <Button size="sm" className="gap-2 shadow-sm bg-green-600 hover:bg-green-700 text-white border-0">
+              <Target className="w-4 h-4" />
+              Uprav profil
+            </Button>
+          </Link>
           <input
             id="dashboard-logo-upload"
             ref={logoInputRef}
@@ -138,19 +156,32 @@ export default function DashboardPage() {
                   return;
                 }
                 const { data: urlData } = supabase.storage.from("brand-logos").getPublicUrl(path);
-                const { error: updateError } = await supabase
+                const newLogoUrl = urlData.publicUrl;
+                let { data: updatedRow, error: updateError } = await supabase
                   .from("profiles")
-                  .update({ brand_logo_url: urlData.publicUrl })
-                  .eq("id", session.user.id);
+                  .update({ brand_logo_url: newLogoUrl })
+                  .eq("id", session.user.id)
+                  .select("brand_logo_url")
+                  .maybeSingle();
+                if (!updateError && !updatedRow) {
+                  const { data: upserted, error: upsertErr } = await supabase
+                    .from("profiles")
+                    .upsert({ id: session.user.id, name: session.user.user_metadata?.name ?? null, brand_logo_url: newLogoUrl }, { onConflict: "id" })
+                    .select("brand_logo_url")
+                    .single();
+                  updateError = upsertErr;
+                  updatedRow = upserted;
+                }
                 if (updateError) {
                   console.error("Profile update error:", updateError);
                   toast.error(`Profil: ${updateError.message}`);
                   return;
                 }
-                const nextProfile = profile ? { ...profile, brand_logo_url: urlData.publicUrl } : null;
+                const nextProfile = profile ? { ...profile, brand_logo_url: newLogoUrl } : null;
                 await syncWorkspaceProfileFromSupabaseProfile(nextProfile);
-                await refreshProfile?.();
-                toast.success("Logo nahráno");
+                await refreshProfile?.({ brand_logo_url: newLogoUrl });
+                setLogoCacheBuster(Date.now());
+                toast.success("Logo nahráno a uloženo");
               } catch (err: any) {
                 console.error("Logo upload exception:", err);
                 toast.error(err?.message || "Něco se pokazilo");
@@ -160,44 +191,31 @@ export default function DashboardPage() {
               }
             }}
           />
-          <div className="flex items-center gap-5 mb-4">
-            <label
-              htmlFor="dashboard-logo-upload"
-              className={`w-32 h-32 rounded-xl border-2 border-dashed border-border bg-muted/50 hover:border-primary/50 hover:bg-muted/70 transition-all flex items-center justify-center overflow-hidden shrink-0 cursor-pointer focus-within:ring-2 focus-within:ring-primary focus-within:ring-offset-2 ${isUploadingLogo ? "pointer-events-none" : ""}`}
-            >
-              {isUploadingLogo ? (
-                <Loader2 className="w-10 h-10 text-primary animate-spin" />
-              ) : profile?.brand_logo_url ? (
-                <img src={profile.brand_logo_url} alt="Firemní logo" className="w-full h-full object-contain p-2" />
-              ) : (
-                <div className="text-center p-2">
-                  <Upload className="w-10 h-10 text-muted-foreground mx-auto mb-1" />
-                  <span className="text-xs text-muted-foreground block">Žádné logo – klikni a nahraj</span>
-                </div>
-              )}
-            </label>
-            <div className="min-w-0 flex-1">
-              <h1 className="font-display text-xl font-bold text-foreground truncate">
-                {profile?.brand_name || "Název značky"}
-              </h1>
-              <p className="text-sm text-muted-foreground truncate">{profile?.business || "Obor / činnost"}</p>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <label
-              htmlFor="dashboard-logo-upload"
-              className="inline-flex items-center justify-center gap-2 rounded-md text-sm font-medium border border-input bg-background px-4 py-2 hover:bg-accent hover:text-accent-foreground cursor-pointer disabled:pointer-events-none disabled:opacity-50"
-            >
-              <Upload className="w-4 h-4" />
-              Nahrát logo
-            </label>
-            <Link to="/app/strategie">
-              <Button variant="outline" size="sm" className="gap-2">
-                <Target className="w-4 h-4" />
-                Upravit celý profil
-              </Button>
-            </Link>
-          </div>
+          <label
+            htmlFor="dashboard-logo-upload"
+            className={`absolute inset-0 rounded-lg border-2 border-dashed border-border bg-muted/50 hover:border-primary/50 hover:bg-muted/70 transition-all flex items-center justify-center overflow-hidden cursor-pointer focus-within:ring-2 focus-within:ring-primary focus-within:ring-inset group ${isUploadingLogo ? "pointer-events-none" : ""}`}
+          >
+            {isUploadingLogo ? (
+              <Loader2 className="w-10 h-10 text-primary animate-spin" />
+            ) : profile?.brand_logo_url ? (
+              <>
+                <img
+                  key={`${profile.brand_logo_url}-${logoCacheBuster}`}
+                  src={profile.brand_logo_url + (logoCacheBuster ? `?v=${logoCacheBuster}` : "")}
+                  alt="Firemní logo"
+                  className="absolute inset-0 w-full h-full object-cover"
+                />
+                <span className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg">
+                  <span className="text-xs font-medium text-white text-center px-2">Klikni pro změnu loga</span>
+                </span>
+              </>
+            ) : (
+              <div className="text-center p-4">
+                <Upload className="w-10 h-10 text-muted-foreground mx-auto mb-1" />
+                <span className="text-sm text-muted-foreground block">Klikni a nahraj logo</span>
+              </div>
+            )}
+          </label>
         </div>
 
         {/* Box 2: Úkoly na dnešní den – červený když jsou úkoly, zelený když ne */}

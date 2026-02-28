@@ -287,6 +287,45 @@ Inspirace: [marketingmonk.ai](https://marketingmonk.ai). Fáze (postupné):
 - **Nutnost:** Na produkci musí tento řádek být, jinak upload větších obrázků (F3) zůstane 413.
 - **Ověření curl (před opravou):** Request s obrázkem ~3 MB vracel **413** (nginx). Po aplikaci skriptu a reloadu nginx očekávej **200** (s `images[]`) nebo **429** (RATE_LIMITED), už ne 413.
 
+### F4 Fix: user prompt is source of truth (Grafika s textem)
+- **Cíl:** Background i texty v režimu „Grafika s textem“ musí STRIKTNĚ vycházet z promptu uživatele. Brand profil pouze doplňuje (industry/target), nesmí prompt přebít.
+- **Implementace:** V `src/marketing/imageCompose.js`: (1) **detectTopic(userPrompt, brand)** – heuristická klasifikace bez LLM: fashion, beauty, food, home, real-estate, tech, generic. (2) **buildBackgroundPrompt** – user prompt je první věta jako „BRIEF (must follow): …“, pak topic-based scene (fashion → editorial fashion, no interiors; home → interior design). (3) **buildNegativePrompt(topic)** – pro fashion/beauty/food/tech přidány guardrails: interior, furniture, wood wall, room, atd. (4) LLM prompt pro headline/subheadline/cta upraven: „Texty MUSÍ odpovídat briefu uživatele. Nesmí se objevit jiné téma.“ (5) **Off-topic retry:** pokud headline/subheadline obsahují interiér, nábytek, byt, atd., provede se 1 re-try s instrukcí „Oprava: předchozí text byl mimo téma. Napiš o: &lt;userPrompt&gt;“. (6) **DEBUG:** při `DEBUG=1` nebo `DEBUG_COMPOSE=1` se loguje topic, zkrácený bgPrompt a negPrompt.
+- **Fix: hlavní prompt je BRIEF z 1. pole; 4. pole je fallback,** když je „Co chcete řešit?“ prázdné – pak se jako BRIEF použije „Popis produktu / nabídky“ a v UI se zobrazí upozornění.
+- **Prompt se posílá jako multi-line brief** (řádky BRIEF / KONTEXT / KLÍČOVÁ SLOVA / POPIS NABÍDKY), ne jako věty spojené tečkami – frontend helper `buildUnifiedBrief`, payload `prompt` do `POST /api/images/compose`.
+- **Test:** Prompt „Jarní kolekce dámské módy, fashion butik“ nesmí vyprodukovat interiér ani wood wall. Prompt „Moderní interiér obýváku“ naopak může generovat interiér. Ověření: jen 1. pole vyplněno → v Network prompt začíná „BRIEF: …“; jen 4. pole vyplněno → stále „BRIEF: …“ (fallback) + UI varování.
+
+### Grafika s textem – topic lock + auto-layout + copy-space
+- **Cíl:** (1) Striktní copy-space a negativní prompt pro leták; (2) auto-layout textů bez překryvu (headline/subheadline/CTA); (3) jemné „topic lock“ – SDXL nesmí přepnout na jiný obor.
+- **A) Background generation – copy-space + negative prompt**
+  - Parametry `textLayout` (default `flyer`) a `textPlacement` (default `bottom_left`) v compose flow. Hodnoty: textLayout `flyer` | `balanced` | `visual`; textPlacement `bottom_left` | `bottom_center` | `top_left` | `right_panel`.
+  - **buildBackgroundPrompt:** pro `flyer` přidává explicitní copy-space podle textPlacement (např. „large clean copy space in the lower-left quadrant“) a vždy „low clutter“. Do pozitivního promptu přidána věta: „Strictly stay within the [industry] context. Do not switch to other industries.“ (topic lock).
+  - **buildNegativePrompt(industry, textLayout):** vždy „text, letters, words, logo, watermark, brand name, typography“ a „busy, cluttered, messy, crowded, over-detailed background“. Pro každý obor (fashion, construction, real_estate, restaurant, fitness, saas) přidány industry-specific exclusions (vzájemné vyloučení záměn, např. construction → bez fashion model/dresses; fashion → bez interior/furniture). Negativní prompt jde do Replicate SDXL (`negative_prompt`).
+- **B) Auto-layout textů bez překryvu**
+  - LLM vrací jen texty a anchor/maxWidthPct/fontScale; y-pozice se neberou z LLM. Backendová funkce **layoutStackedText({ placement, canvasW, canvasH, headline, subheadline, cta })** v `src/marketing/imageCompose.js` určuje safe area podle placement (např. bottom_left: x=7% W, y=60% H, w=86% W, h=33% H), skládá headline → subheadline → CTA s mezerami; při nevezení zmenšuje fonty (headline 56→48→40, subheadline 32→28→24). **measureTextBlock** v `src/render/canvasRenderer.js` (word-wrap + výška bloku) slouží pro výpočet.
+  - **buildLayersFromLayout(layout, dims, opts)** volá layoutStackedText a vrací vrstvy s vypočítanými x, y, fontSize.
+- **C) Kontrasty pro čitelnost (overlay)**
+  - Pro **textLayout = flyer** se v `canvasRenderer` používá overlay typu **panel** (tmavý obdélník, opacity 0,55–0,75). Pro **balanced**: gradient. Pro **visual**: slabší gradient.
+- **D) API + frontend**
+  - **POST /api/images/compose** přijímá `textLayout` a `textPlacement` (defaulty flyer, bottom_left). **POST /api/images/compose/render** používá vrstvy z těla požadavku (bez změny).
+  - V **ImageNeoBotWorkspace** (režim „Grafika s textem“): dva dropdowny – **Kompozice textu** (Leták / Vyvážená / Vizuál dominuje) a **Umístění textu** (Dole vlevo / Dole na středu / Nahoře vlevo / Vpravo panel). Hodnoty se posílají v payloadu compose.
+- **Testy**
+  1. **Fashion:** prompt „Jarní kolekce dámské módy, fashion butik“ + flyer + bottom_left → pozadí bez interiéru/nábytku, s fashion prvky (model/outfit/boutique); texty bez překryvu.
+  2. **Construction:** prompt „Stavební rozpočty ÚRS RTS“ + flyer + top_left → helma/výkresy/laptop; žádná modelka/šaty; texty bez překryvu.
+
+### Master Image Prompt Engine (globální kvalita a industry lock)
+- **Cíl:** Všechna generování obrázků (SDXL / img2img) používají jednotný „master“ prompt builder: marketingová kvalita, anti-repetice, zámek na obor klienta.
+- **Konfigurace:**
+  - **src/config/masterPrompt.js:** `GLOBAL_MARKETING_BASE` (high-end commercial, cinematic lighting, unique composition, one hero subject, NEVER catalog/grid/text), `GLOBAL_NEGATIVE_BASE` (text, duplicated objects, grid, catalog shot), `CREATIVE_VARIATION_SEEDS` (různé kreativní směry pro batch).
+  - **src/config/industryPrompts.js:** `INDUSTRY_PROMPTS` pro fashion, construction, real_estate, restaurant, fitness, saas, general – typické prostředí, světlo, hero subjekty, zakázané cross-industry prvky.
+- **Builder a profil:**
+  - **src/marketing/masterPromptBuilder.js:** `buildMasterImagePrompt({ clientProfile, campaignPrompt, industry, imageMode, variationKey, placementHint })`, `buildMasterNegativePrompt({ clientProfile, industry, imageMode, textLayout })`. Vždy slučuje globální bázi + industry + campaign + kreativní variaci (z variationKey). Pravidla: „Strictly stay within [industry] context“, „no duplicated items, no rows of identical products, no grid“. Text v obrázku nikdy (vše přes canvas).
+  - **src/marketing/clientProfile.js:** `getClientProfile(clientProfileFromReq, fallbackIndustry)` – pro client/agency režim; bez profilu se použije fallback industry.
+- **Zapojení:**
+  - **src/imageProviders/replicate.js:** `generateBackground` a `generateFromImage` při parametrech `clientProfile` / `campaignPrompt` / `industry` volají master builder místo surového promptu. Legacy volání (jen `prompt`/`negativePrompt`) zůstávají podporována.
+  - **src/marketing/imageCompose.js:** `buildBackgroundPrompt` sestavuje prompt přes `buildMasterImagePrompt` (imageMode=background, placementHint pro copy-space). `buildNegativePrompt` deleguje na `buildMasterNegativePrompt`.
+  - **src/marketing/adsStudio.js:** `generateImagesFromUrl` a `generateProductVariants` předávají `clientProfile`, `campaignPrompt`, `industry` (z detectIndustry), `variationKey: requestId-i` pro anti-repeat v dávkách.
+- **Debug:** Při `?debug=1` a NODE_ENV !== production vrací compose API v odpovědi `_debug: { prompt, negativePrompt }`.
+
 ### Image generation optimalizace a výběr rozlišení (Reklamní studio F2 + F3)
 - **Cíl:** Snížit náklady na generování obrázků (Replicate) a zároveň zachovat profesionální kvalitu výstupů v Reklamním studiu. Uživatel si může zvolit rozlišení výstupu, NeoBot interně generuje v nižším rozlišení a následně provádí upscale přes `sharp`.
 - **Výběr rozlišení v UI:** Na stránce Reklamní studio (`/app/ads`) je ve F2 (Obrázkové reklamy) přidaný dropdown **„Rozlišení“** s hodnotami:

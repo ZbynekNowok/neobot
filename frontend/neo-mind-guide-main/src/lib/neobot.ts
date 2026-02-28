@@ -1,4 +1,6 @@
-export const NEOBOT_API_BASE = "https://api.neobot.cz";
+export const NEOBOT_API_BASE =
+  (typeof import.meta !== "undefined" && (import.meta.env?.VITE_NEOBOT_API_BASE as string)?.trim()) ||
+  "https://api.neobot.cz";
 export const NEOBOT_API_KEY = import.meta.env.VITE_NEOBOT_API_KEY || "";
 
 const apiHeaders = (): HeadersInit => ({
@@ -7,9 +9,16 @@ const apiHeaders = (): HeadersInit => ({
   "x-api-key": NEOBOT_API_KEY,
 });
 
+function buildApiUrl(path: string): string {
+  const base = NEOBOT_API_BASE.replace(/\/$/, "");
+  const p = path.replace(/^\//, "");
+  return p ? `${base}/${p}` : base;
+}
+
 /** Shared fetch helper – all NeoBot API calls go through here */
 export async function neobotFetch(path: string, opts?: RequestInit) {
-  const res = await fetch(`${NEOBOT_API_BASE}${path}`, {
+  const url = buildApiUrl(path);
+  const res = await fetch(url, {
     ...opts,
     headers: { ...apiHeaders(), ...(opts?.headers || {}) },
     credentials: "omit",
@@ -106,7 +115,7 @@ export async function syncWorkspaceProfileFromSupabaseProfile(profile: Record<st
     main_services: profile.marketing_goal ?? profile.main_services,
     cta_style: profile.brand_keywords ?? profile.cta_style,
   };
-  if (profile.brand_logo_url) body.brand_logo_url = profile.brand_logo_url;
+  if (profile.brand_logo_url !== undefined) body.brand_logo_url = profile.brand_logo_url ?? null;
   await neobotFetch("/api/workspace/profile", {
     method: "POST",
     body: JSON.stringify(body),

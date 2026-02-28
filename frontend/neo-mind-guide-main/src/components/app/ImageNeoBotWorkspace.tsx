@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useTaskOutputSaver } from "@/hooks/useTaskOutputSaver";
 import TaskContextBanner from "@/components/app/TaskContextBanner";
-import { NEOBOT_API_BASE, NEOBOT_API_KEY, saveOutputToHistory } from "@/lib/neobot";
+import { NEOBOT_API_BASE, NEOBOT_API_KEY, saveOutputToHistory, neobotFetch } from "@/lib/neobot";
 import { 
   ArrowRight,
   Image,
@@ -28,6 +28,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Stage, Layer, Image as KonvaImage, Text as KonvaText, Group, Rect } from "react-konva";
 import { UserProfile } from "@/components/app/AppLayout";
 import NeoBotSteps from "@/components/app/NeoBotSteps";
 import { toast } from "sonner";
@@ -64,10 +66,121 @@ interface ImageOutputData {
 }
 
 interface ComposeState {
-  backgroundUrl: string | null;
-  layers: any[] | null;
+  backgroundUrl: string;
+  layers: any[];
   format: "square" | "story" | "landscape";
   resolution: "preview" | "standard" | "high";
+}
+
+/** Canvas dimensions for compose (must match backend getCanvasDimensions). */
+function getCanvasDimensions(format: string, resolution: string): { width: number; height: number } {
+  const fmt = ["square", "story", "landscape"].includes(format) ? format : "square";
+  const res = ["preview", "standard", "high"].includes(resolution) ? resolution : "standard";
+  const presets: Record<string, Record<string, { width: number; height: number }>> = {
+    preview: { square: { width: 720, height: 720 }, story: { width: 720, height: 1280 }, landscape: { width: 1280, height: 720 } },
+    standard: { square: { width: 1080, height: 1080 }, story: { width: 1080, height: 1920 }, landscape: { width: 1920, height: 1080 } },
+    high: { square: { width: 2048, height: 2048 }, story: { width: 2048, height: 3640 }, landscape: { width: 3640, height: 2048 } },
+  };
+  const p = presets[res]?.[fmt] ?? presets.standard.square;
+  return { width: p.width, height: p.height };
+}
+
+function buildUnifiedBrief({ mainBrief, topic, keywords, offer }: { mainBrief: string; topic?: string; keywords?: string; offer?: string }) {
+  const lines: string[] = [];
+  lines.push(`BRIEF: ${(mainBrief && mainBrief.trim()) || ""}`);
+  if (topic?.trim()) lines.push(`KONTEXT: ${topic.trim()}`);
+  if (keywords?.trim()) lines.push(`KLÍČOVÁ SLOVA: ${keywords.trim()}`);
+  if (offer?.trim()) lines.push(`POPIS: ${offer.trim()}`);
+  return lines.join("\n");
+}
+
+const MAX_STAGE_DISPLAY = 420;
+
+function ComposeCanvas({
+  composeState,
+  draftTexts,
+  backgroundImage,
+  onLayerDragEnd,
+}: {
+  composeState: ComposeState;
+  draftTexts: { headline: string; subheadline: string; bullets: string[]; cta: string };
+  backgroundImage: HTMLImageElement;
+  onLayerDragEnd: (id: string, x: number, y: number) => void;
+}) {
+  const { width: canvasWidth, height: canvasHeight } = getCanvasDimensions(composeState.format, composeState.resolution);
+  const scale = Math.min(MAX_STAGE_DISPLAY / canvasWidth, MAX_STAGE_DISPLAY / canvasHeight, 1);
+
+  const draggableLayers = (composeState.layers || []).filter(
+    (l: any) => (l.type === "text" || l.type === "button") && typeof l.x === "number" && typeof l.y === "number"
+  );
+
+  const getLayerText = (layer: any) => {
+    if (layer.id === "headline") return draftTexts.headline || layer.text || "";
+    if (layer.id === "subheadline") return draftTexts.subheadline || layer.text || "";
+    if (layer.id === "cta") return draftTexts.cta || layer.text || "";
+    return String(layer.text || "");
+  };
+
+  return (
+    <div className="rounded-lg overflow-hidden" style={{ width: canvasWidth * scale, height: canvasHeight * scale, maxWidth: "100%" }}>
+      <Stage width={canvasWidth} height={canvasHeight} scaleX={scale} scaleY={scale}>
+        <Layer>
+          <KonvaImage image={backgroundImage} x={0} y={0} width={canvasWidth} height={canvasHeight} listening={false} />
+          {draggableLayers.map((layer: any) => {
+            if (layer.type === "text") {
+              const fontSize = Number(layer.fontSize) || 32;
+              const color = (layer.color && String(layer.color).trim()) || "#ffffff";
+              const text = getLayerText(layer);
+              return (
+                <KonvaText
+                  key={layer.id}
+                  x={layer.x}
+                  y={layer.y}
+                  text={text || " "}
+                  fontSize={fontSize}
+                  fontFamily="Inter, sans-serif"
+                  fontStyle={Number(layer.fontWeight) >= 700 ? "bold" : "normal"}
+                  fill={color}
+                  listening={true}
+                  draggable
+                  onDragEnd={(e) => onLayerDragEnd(layer.id, e.target.x(), e.target.y())}
+                />
+              );
+            }
+            if (layer.type === "button") {
+              const w = Number(layer.w) || 280;
+              const h = Number(layer.h) || 64;
+              const bg = (layer.bg && String(layer.bg).trim()) || "#2563eb";
+              const color = (layer.color && String(layer.color).trim()) || "#ffffff";
+              const text = getLayerText(layer);
+              return (
+                <Group key={layer.id} x={layer.x} y={layer.y} draggable onDragEnd={(e) => onLayerDragEnd(layer.id, e.target.x(), e.target.y())}>
+                  <Rect width={w} height={h} fill={bg} cornerRadius={Math.min(999, h / 2, w / 2)} listening={false} />
+                  <KonvaText
+                    text={text || " "}
+                    width={w}
+                    height={h}
+                    fontSize={Math.min(32, h * 0.5)}
+                    fontFamily="Inter, sans-serif"
+                    fontStyle="bold"
+                    fill={color}
+                    align="center"
+                    verticalAlign="middle"
+                    listening={false}
+                    offsetX={w / 2}
+                    offsetY={h / 2}
+                    x={w / 2}
+                    y={h / 2}
+                  />
+                </Group>
+              );
+            }
+            return null;
+          })}
+        </Layer>
+      </Stage>
+    </div>
+  );
 }
 
 // Each function now has a defaultFormat derived from type
@@ -178,11 +291,13 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
   // Output mode: visual (no text) or marketing (with text/flyer)
   const [outputMode, setOutputMode] = useState<OutputMode>("visual");
 
-  // Marketing mode – social-card/draft fields
-  const [goals, setGoals] = useState("");
-  const [theme, setTheme] = useState("");
+  // Marketing mode – main brief + optional advanced fields
+  const [mainBrief, setMainBrief] = useState("");
+  const [topic, setTopic] = useState("");
   const [keywords, setKeywords] = useState("");
+  const [offer, setOffer] = useState("");
   const [marketingStep, setMarketingStep] = useState(0);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   // Draft response texts (editable after generation)
   const [draftTexts, setDraftTexts] = useState<{ headline: string; subheadline: string; bullets: string[]; cta: string }>({ headline: "", subheadline: "", bullets: [], cta: "" });
 
@@ -191,11 +306,38 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
   const [format, setFormat] = useState("square");
   const [purpose, setPurpose] = useState("prodej");
   const [color, setColor] = useState("neutral");
+  const [textLayout, setTextLayout] = useState<"flyer" | "balanced" | "visual">("flyer");
+  const [textPlacement, setTextPlacement] = useState<"auto" | "bottom_left" | "bottom_center" | "top_left" | "top_center" | "center" | "right_panel">("bottom_left");
   
   // Output data
   const [imageOutput, setImageOutput] = useState<ImageOutputData | null>(null);
   const [composeState, setComposeState] = useState<ComposeState | null>(null);
+  const [loadingCompose, setLoadingCompose] = useState(false);
+  const [loadingRender, setLoadingRender] = useState(false);
+  const [errorCompose, setErrorCompose] = useState<string | null>(null);
+  const [errorRender, setErrorRender] = useState<string | null>(null);
+  const [backgroundImage, setBackgroundImage] = useState<HTMLImageElement | null>(null);
   const { taskContext, saveOutputToTask, isSavingToTask, savedToTask, navigateBackToTask } = useTaskOutputSaver();
+
+  const isDebug = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "1";
+
+  // Load background image for Konva when composeState has backgroundUrl
+  useEffect(() => {
+    if (!composeState?.backgroundUrl) {
+      setBackgroundImage(null);
+      return;
+    }
+    const img = new window.Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => setBackgroundImage(img);
+    img.onerror = () => setBackgroundImage(null);
+    img.src = composeState.backgroundUrl;
+    return () => {
+      img.onload = null;
+      img.onerror = null;
+      img.src = "";
+    };
+  }, [composeState?.backgroundUrl]);
 
   // Reset to step 1 on mount if no task context
   useEffect(() => {
@@ -205,9 +347,10 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
       setInputValue("");
       setImageOutput(null);
       setOutputMode("visual");
-      setGoals("");
-      setTheme("");
+      setMainBrief("");
+      setTopic("");
       setKeywords("");
+      setOffer("");
       setDraftTexts({ headline: "", subheadline: "", bullets: [], cta: "" });
       setMarketingStep(0);
       return;
@@ -228,7 +371,10 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
       }
     }
     const brief = [taskContext.task, taskContext.goal ? `Cíl: ${taskContext.goal}` : ""].filter(Boolean).join("\n");
-    if (brief) setInputValue(brief);
+    if (brief) {
+      setInputValue(brief);
+      setMainBrief(brief);
+    }
     setCurrentStep("input");
   }, [taskContext]);
 
@@ -314,79 +460,103 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
   };
 
   const handleGenerate = async () => {
-    if (!inputValue.trim()) return;
+    if (outputMode === "marketing") {
+      if (!mainBrief.trim()) return;
+    } else {
+      if (!inputValue.trim()) return;
+    }
     setIsGenerating(true);
 
     const backendFormat = getBackendFormat();
 
-    // Marketing mode → call /api/design/social-card/draft
+    // Marketing mode (Grafika s textem) → POST /api/images/compose
     if (outputMode === "marketing") {
+      setErrorCompose(null);
+      setLoadingCompose(true);
       try {
-        // Server resolves client profile from x-api-key – do NOT send profile field
-        const draftBody: Record<string, any> = {
-          goals: goals || undefined,
-          theme: theme || undefined,
-          keywords: keywords ? keywords.split(",").map(k => k.trim()).filter(Boolean) : undefined,
-          product_description: inputValue.trim() || undefined,
-          format: backendFormat,
-          style: getStyleLabel(),
-          palette: colorOptions.find(c => c.id === color)?.label || undefined,
-          purpose: purposeOptions.find(p => p.id === purpose)?.label || undefined,
+        const composeFormat = format === "portrait" || format === "story" ? "story" : format === "landscape" ? "landscape" : "square";
+        const styleMap: Record<string, string> = {
+          minimalist: "minimalisticky",
+          luxury: "luxusni",
+          playful: "hravy",
+          natural: "prirozeny",
         };
-
-        const res = await fetch(`${NEOBOT_API_BASE}/api/design/social-card/draft`, {
-          method: "POST",
-          credentials: "omit",
-          headers: { "Content-Type": "application/json", "Accept": "application/json", "x-api-key": NEOBOT_API_KEY },
-          body: JSON.stringify(draftBody),
+        const paletteMap: Record<string, string> = {
+          neutral: "neutralni",
+          warm: "teple",
+          cool: "studene",
+          vibrant: "vyrazne",
+        };
+        const unifiedPrompt = buildUnifiedBrief({
+          mainBrief: mainBrief.trim(),
+          topic: topic.trim() || undefined,
+          keywords: keywords.trim() || undefined,
+          offer: offer.trim() || undefined,
         });
-        const data = await res.json().catch(() => null);
-        console.log("[Social Card Draft] status", res.status, "body", data);
-
-        if (!res.ok || !data) {
-          let msg = (data && (data.message || data.error)) || "Draft se nezdařil";
-          if (res.status === 401 || res.status === 403) msg = "Chybí nebo je neplatný API klíč.";
-          if (res.status === 402) msg = "Došel kredit / units.";
-          throw new Error(msg);
-        }
-
-        // Extract background image and logo (from workspace profile)
-        const bgPath = data?.template?.background?.imageUrl;
-        const bgUrl = bgPath ? (bgPath.startsWith("http") ? bgPath : `${NEOBOT_API_BASE}${bgPath}`) : null;
-        const logoUrl = data?.template?.logoUrl ? (String(data.template.logoUrl).startsWith("http") ? data.template.logoUrl : data.template.logoUrl) : null;
-
-        // Extract texts
-        const texts = data?.template?.texts || {};
-        const newTexts = {
+        const payload = {
+          type: selectedFunction?.id || "instagram_post",
+          format: composeFormat,
+          resolution: "standard",
+          style: styleMap[style] || "minimalisticky",
+          purpose: purpose,
+          palette: paletteMap[color] || "neutralni",
+          prompt: unifiedPrompt,
+          brand: profile ? { name: profile.brand_name || undefined } : {},
+          backgroundOnly: false,
+          textLayout,
+          textPlacement,
+        };
+        const data = await neobotFetch("/api/images/compose", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        }) as any;
+        const bgUrl = data?.background?.url
+          ? (String(data.background.url).startsWith("http") ? data.background.url : `${NEOBOT_API_BASE}${data.background.url}`)
+          : "";
+        const compositeUrl = data?.composite?.url
+          ? (String(data.composite.url).startsWith("http") ? data.composite.url : `${NEOBOT_API_BASE}${data.composite.url}`)
+          : "";
+        setComposeState({
+          backgroundUrl: bgUrl,
+          layers: Array.isArray(data?.layers) ? data.layers : [],
+          format: data?.format || composeFormat,
+          resolution: data?.resolution || "standard",
+        });
+        const texts = data?.texts || {};
+        setDraftTexts({
           headline: texts.headline || "",
           subheadline: texts.subheadline || "",
-          bullets: Array.isArray(texts.bullets) ? texts.bullets : [],
+          bullets: [],
           cta: texts.cta || "",
-        };
-        setDraftTexts(newTexts);
-
+        });
         const sections: ImageSection[] = [
-          { id: "headline", title: "Nadpis", content: newTexts.headline },
-          { id: "subheadline", title: "Podnadpis", content: newTexts.subheadline },
-          ...(newTexts.bullets.length > 0 ? [{ id: "bullets", title: "Body", content: newTexts.bullets.join("\n") }] : []),
-          { id: "cta", title: "Výzva k akci (CTA)", content: newTexts.cta },
-          { id: "format", title: "Formát", content: backendFormat },
+          { id: "headline", title: "Nadpis", content: texts.headline || "" },
+          { id: "subheadline", title: "Podnadpis", content: texts.subheadline || "" },
+          { id: "cta", title: "Výzva k akci (CTA)", content: texts.cta || "" },
+          { id: "format", title: "Formát", content: getFormatLabel() },
         ].filter(s => s.content);
-
         setImageOutput({
-          name: `${selectedFunction?.label || "Grafika"} – social card`,
+          name: `${selectedFunction?.label || "Grafika"} – s textem`,
           style: getStyleLabel(),
           format: getFormatLabel(),
           purpose: purposeOptions.find(p => p.id === purpose)?.label || "Prodej",
-          imageUrl: bgUrl,
-          logoUrl: logoUrl || null,
+          imageUrl: compositeUrl,
+          logoUrl: null,
           sections,
         });
         setCurrentStep("proposal");
       } catch (e: any) {
-        console.error("Social card draft error:", e);
-        toast.error("Nepodařilo se vygenerovat grafiku: " + (e?.message || "Neznámá chyba"));
+        const status = e?.status;
+        const msg = e?.message || "Compose selhal";
+        let displayMsg = msg;
+        if (status === 429) displayMsg = "Limit poskytovatele (zkus později)";
+        else if (status === 503) displayMsg = "Model je dočasně nedostupný";
+        setErrorCompose(displayMsg);
+        if (status === 429) toast.error("Limit poskytovatele (zkus později)");
+        else if (status === 503) toast.error("Model je dočasně nedostupný");
+        else toast.error(msg);
       } finally {
+        setLoadingCompose(false);
         setIsGenerating(false);
       }
       return;
@@ -423,6 +593,58 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
     }
   };
 
+  const handleUpdateLayout = async () => {
+    if (!composeState) return;
+    setErrorRender(null);
+    setLoadingRender(true);
+    try {
+      const updatedLayers = composeState.layers.map((layer: any) => {
+        if (layer.type === "text" && layer.id === "headline") return { ...layer, text: draftTexts.headline };
+        if (layer.type === "text" && layer.id === "subheadline") return { ...layer, text: draftTexts.subheadline };
+        if (layer.type === "button" && layer.id === "cta") return { ...layer, text: draftTexts.cta };
+        return layer;
+      });
+      const data = await neobotFetch("/api/images/compose/render", {
+        method: "POST",
+        body: JSON.stringify({
+          backgroundUrl: composeState.backgroundUrl,
+          format: composeState.format,
+          resolution: composeState.resolution,
+          layers: updatedLayers,
+        }),
+      }) as any;
+      const compositeUrl = data?.composite?.url
+        ? (String(data.composite.url).startsWith("http") ? data.composite.url : `${NEOBOT_API_BASE}${data.composite.url}`)
+        : "";
+      if (compositeUrl && imageOutput) {
+        setImageOutput({ ...imageOutput, imageUrl: compositeUrl });
+      }
+      if (Array.isArray(data?.layers)) {
+        setComposeState((prev) => (prev ? { ...prev, layers: data.layers } : null));
+      }
+    } catch (e: any) {
+      const status = e?.status;
+      const msg = e?.message || "Render selhal";
+      const displayMsg = status === 500 ? "Render se nepodařil" : msg;
+      setErrorRender(displayMsg);
+      if (status === 400) toast.error(msg);
+      else if (status === 500) toast.error("Render se nepodařil");
+      else toast.error(msg);
+    } finally {
+      setLoadingRender(false);
+    }
+  };
+
+  const updateLayerPosition = (id: string, x: number, y: number) => {
+    setComposeState((prev) => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        layers: prev.layers.map((l: any) => (l.id === id ? { ...l, x, y } : l)),
+      };
+    });
+  };
+
   const handleEditSection = (sectionId: string) => {
     if (!imageOutput) return;
     setImageOutput({
@@ -451,6 +673,9 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
     setCurrentStep("input");
     setInputValue("");
     setImageOutput(null);
+    setComposeState(null);
+    setErrorCompose(null);
+    setErrorRender(null);
   };
 
   const handleNewImage = () => {
@@ -458,10 +683,14 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
     setSelectedFunction(null);
     setInputValue("");
     setImageOutput(null);
+    setComposeState(null);
+    setErrorCompose(null);
+    setErrorRender(null);
     setOutputMode("visual");
-    setGoals("");
-    setTheme("");
+    setMainBrief("");
+    setTopic("");
     setKeywords("");
+    setOffer("");
     setDraftTexts({ headline: "", subheadline: "", bullets: [], cta: "" });
     setMarketingStep(0);
     toast.success("Připraveno pro další vizuál");
@@ -693,54 +922,98 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
                   ))}
                 </div>
               </div>
+
+              {outputMode === "marketing" && (
+                <>
+                  <div className="space-y-2">
+                    <label className="text-sm text-muted-foreground">Kompozice textu</label>
+                    <select
+                      value={textLayout}
+                      onChange={e => setTextLayout(e.target.value as "flyer" | "balanced" | "visual")}
+                      className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+                    >
+                      <option value="flyer">Leták (text dominuje)</option>
+                      <option value="balanced">Vyvážená</option>
+                      <option value="visual">Vizuál dominuje</option>
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm text-muted-foreground">Umístění textu</label>
+                    <select
+                      value={textPlacement}
+                      onChange={e => setTextPlacement(e.target.value as "auto" | "bottom_left" | "bottom_center" | "top_left" | "top_center" | "center" | "right_panel")}
+                      className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+                    >
+                      <option value="auto">Auto (podle obrázku)</option>
+                      <option value="bottom_left">Dole vlevo</option>
+                      <option value="bottom_center">Dole na středu</option>
+                      <option value="top_left">Nahoře vlevo</option>
+                      <option value="top_center">Nahoře na středu</option>
+                      <option value="center">Na středu</option>
+                      <option value="right_panel">Vpravo (panel)</option>
+                    </select>
+                  </div>
+                </>
+              )}
             </div>
 
-            {/* Marketing mode: all fields on one screen */}
+            {/* Marketing mode: one main field + optional collapsible */}
             {outputMode === "marketing" && (
               <div className="space-y-4 border-t border-border/50 pt-4">
                 <h4 className="font-semibold text-foreground flex items-center gap-2">
                   <LayoutTemplate className="w-4 h-4 text-accent" />
                   Konzultační zadání pro grafiku
                 </h4>
-                <div className="grid gap-4">
-                  <div className="space-y-1">
-                    <label className="text-sm font-medium text-foreground block">Co chcete řešit?</label>
-                    <Textarea
-                      placeholder="Např.: Zvýšit povědomí o naší nabídce, přilákat nové zákazníky na akci"
-                      value={goals}
-                      onChange={e => setGoals(e.target.value)}
-                      className="min-h-[70px] bg-background/50"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-sm font-medium text-foreground block">Téma / kontext (volitelné)</label>
-                    <Input
-                      placeholder="Např.: Zahradní branka, wellness balíček, sezónní menu"
-                      value={theme}
-                      onChange={e => setTheme(e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-sm font-medium text-foreground block">Klíčová slova (oddělená čárkou, volitelné)</label>
-                    <Input
-                      placeholder="Např.: kvalita, akce, novinka, doprava zdarma"
-                      value={keywords}
-                      onChange={e => setKeywords(e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-sm font-medium text-foreground block">Popis produktu / nabídky</label>
-                    <Textarea
-                      placeholder="Např.: Kovové zahradní vrátky s povrchovou úpravou, odolné vůči povětrnostním podmínkám"
-                      value={inputValue}
-                      onChange={e => setInputValue(e.target.value)}
-                      className="min-h-[70px] bg-background/50"
-                    />
-                  </div>
+                <div className="space-y-1">
+                  <label className="text-sm font-medium text-foreground block">Co chcete vytvořit?</label>
+                  <Textarea
+                    placeholder="Např.: Jarní kolekce dámské módy, fashion butik — nebo: moderní interiér obýváku"
+                    value={mainBrief}
+                    onChange={e => setMainBrief(e.target.value)}
+                    className="min-h-[70px] bg-background/50"
+                  />
+                  <p className="text-xs text-muted-foreground">Povinné pole; podle něj se vygeneruje pozadí i texty.</p>
                 </div>
+                <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+                  <CollapsibleTrigger asChild>
+                    <button type="button" className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors">
+                      <ChevronDown className={`w-4 h-4 transition-transform ${advancedOpen ? "rotate-180" : ""}`} />
+                      Pokročilé upřesnění (volitelné)
+                    </button>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <div className="grid gap-4 pt-4 pl-6 border-l-2 border-border/50">
+                      <div className="space-y-1">
+                        <label className="text-sm font-medium text-foreground block">Kontext / téma</label>
+                        <Input
+                          placeholder="Např.: Zahradní branka, wellness balíček, sezónní menu"
+                          value={topic}
+                          onChange={e => setTopic(e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-sm font-medium text-foreground block">Klíčová slova (oddělená čárkou)</label>
+                        <Input
+                          placeholder="Např.: kvalita, akce, novinka, doprava zdarma"
+                          value={keywords}
+                          onChange={e => setKeywords(e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-sm font-medium text-foreground block">Popis produktu</label>
+                        <Textarea
+                          placeholder="Např.: Kovové zahradní vrátky s povrchovou úpravou, odolné vůči povětrnostním podmínkám"
+                          value={offer}
+                          onChange={e => setOffer(e.target.value)}
+                          className="min-h-[70px] bg-background/50"
+                        />
+                      </div>
+                    </div>
+                  </CollapsibleContent>
+                </Collapsible>
                 <Button
                   onClick={handleGenerate}
-                  disabled={!inputValue.trim() || isGenerating}
+                  disabled={!mainBrief.trim() || isGenerating}
                   className="w-full bg-gradient-to-r from-accent to-primary hover:opacity-90"
                   size="lg"
                 >
@@ -750,6 +1023,21 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
                     <>Vytvořit návrh<ArrowRight className="w-4 h-4 ml-2" /></>
                   )}
                 </Button>
+                {isDebug && mainBrief.trim() && (() => {
+                  const debugPrompt = buildUnifiedBrief({
+                    mainBrief: mainBrief.trim(),
+                    topic: topic.trim() || undefined,
+                    keywords: keywords.trim() || undefined,
+                    offer: offer.trim() || undefined,
+                  });
+                  const displayPrompt = debugPrompt.length > 400 ? debugPrompt.slice(0, 400) + "…" : debugPrompt;
+                  return (
+                    <div className="rounded-lg bg-muted/50 p-3 text-left">
+                      <p className="text-xs font-medium text-muted-foreground mb-1">Prompt poslaný do API:</p>
+                      <pre className="text-xs text-foreground whitespace-pre-wrap break-words max-h-32 overflow-auto">{displayPrompt}</pre>
+                    </div>
+                  );
+                })()}
               </div>
             )}
 
@@ -808,18 +1096,44 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
             </div>
           </div>
 
-          {/* Image Preview (s logo v rohu, pokud je v profilu) */}
+          {/* Image Preview: Konva drag editor (marketing) or static image */}
           <div className="glass rounded-xl p-8 text-center">
-            {imageOutput.imageUrl ? (
+            {outputMode === "marketing" && composeState?.backgroundUrl && backgroundImage && Array.isArray(composeState.layers) && composeState.layers.some((l: any) => (l.type === "text" || l.type === "button") && typeof l.x === "number" && typeof l.y === "number") ? (
+              <div className="relative inline-block w-full max-w-md mx-auto">
+                <ComposeCanvas
+                  composeState={composeState}
+                  draftTexts={draftTexts}
+                  backgroundImage={backgroundImage}
+                  onLayerDragEnd={updateLayerPosition}
+                />
+                {loadingRender && (
+                  <div className="absolute inset-0 rounded-lg bg-black/50 flex items-center justify-center pointer-events-none">
+                    <Loader2 className="w-10 h-10 text-white animate-spin" />
+                    <span className="ml-2 text-white text-sm">Aktualizuji layout…</span>
+                  </div>
+                )}
+                {imageOutput?.logoUrl && (
+                  <div className="absolute top-3 right-3 w-14 h-14 rounded-lg bg-background/90 shadow-md flex items-center justify-center overflow-hidden pointer-events-none">
+                    <img src={imageOutput.logoUrl} alt="Logo" className="max-w-full max-h-full object-contain" />
+                  </div>
+                )}
+              </div>
+            ) : imageOutput?.imageUrl ? (
               <div className="relative inline-block w-full max-w-md mx-auto">
                 <img src={imageOutput.imageUrl} alt="Náhled vizuálu" className="w-full rounded-lg object-contain" />
+                {loadingRender && (
+                  <div className="absolute inset-0 rounded-lg bg-black/50 flex items-center justify-center">
+                    <Loader2 className="w-10 h-10 text-white animate-spin" />
+                    <span className="ml-2 text-white text-sm">Aktualizuji layout…</span>
+                  </div>
+                )}
                 {outputMode === "marketing" && imageOutput.logoUrl && (
                   <div className="absolute top-3 right-3 w-14 h-14 rounded-lg bg-background/90 shadow-md flex items-center justify-center overflow-hidden">
                     <img src={imageOutput.logoUrl} alt="Logo" className="max-w-full max-h-full object-contain" />
                   </div>
                 )}
               </div>
-            ) : isGenerating ? (
+            ) : isGenerating || loadingCompose ? (
               <div className="w-full aspect-square max-w-md mx-auto rounded-lg bg-muted/50 flex items-center justify-center">
                 <div className="text-center">
                   <Loader2 className="w-10 h-10 text-primary mx-auto mb-2 animate-spin" />
@@ -838,12 +1152,25 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
           {/* Content Sections */}
           {outputMode === "marketing" ? (
             <div className="space-y-4">
+              {(errorCompose || errorRender) && (
+                <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+                  {errorCompose && <p><strong>Compose:</strong> {errorCompose}</p>}
+                  {errorRender && <p><strong>Render:</strong> {errorRender}</p>}
+                </div>
+              )}
+              {isDebug && (
+                <p className="text-xs text-muted-foreground">
+                  compose calls: /api/images/compose · render calls: /api/images/compose/render
+                </p>
+              )}
               <div className="flex items-center justify-between">
                 <h4 className="font-semibold text-foreground">Texty grafiky</h4>
-                <Button variant="outline" size="sm" onClick={() => handleGenerate()} disabled={isGenerating}>
-                  <Wand2 className={`w-4 h-4 mr-1 ${isGenerating ? "animate-spin" : ""}`} />
-                  Přepsat texty od AI
-                </Button>
+                {composeState && (
+                  <Button variant="outline" size="sm" onClick={() => handleGenerate()} disabled={loadingCompose}>
+                    <Wand2 className={`w-4 h-4 mr-1 ${loadingCompose ? "animate-spin" : ""}`} />
+                    Přepsat texty od AI
+                  </Button>
+                )}
               </div>
               <div className="glass rounded-xl p-5 space-y-4">
                 <div className="space-y-1">
@@ -855,16 +1182,18 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
                   <Input value={draftTexts.subheadline} onChange={e => setDraftTexts(prev => ({ ...prev, subheadline: e.target.value }))} className="bg-background/50" />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-sm font-medium text-foreground">Body (bullets)</label>
-                  {draftTexts.bullets.map((b, i) => (
-                    <Input key={i} value={b} onChange={e => { const nb = [...draftTexts.bullets]; nb[i] = e.target.value; setDraftTexts(prev => ({ ...prev, bullets: nb })); }} className="bg-background/50 mb-1" />
-                  ))}
-                  <Button variant="ghost" size="sm" onClick={() => setDraftTexts(prev => ({ ...prev, bullets: [...prev.bullets, ""] }))}>+ Přidat bod</Button>
-                </div>
-                <div className="space-y-1">
                   <label className="text-sm font-medium text-foreground">Výzva k akci (CTA)</label>
                   <Input value={draftTexts.cta} onChange={e => setDraftTexts(prev => ({ ...prev, cta: e.target.value }))} className="bg-background/50" />
                 </div>
+                {composeState && (
+                  <Button
+                    onClick={handleUpdateLayout}
+                    disabled={loadingRender || !composeState}
+                    className="w-full sm:w-auto"
+                  >
+                    {loadingRender ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Aktualizuji…</> : "Aktualizovat layout"}
+                  </Button>
+                )}
               </div>
             </div>
           ) : (
@@ -1002,11 +1331,6 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
             <Button variant="ghost" onClick={handleNewImage}>Nový vizuál</Button>
           </div>
         </div>
-      )}
-    </div>
-  );
-}
->
       )}
     </div>
   );

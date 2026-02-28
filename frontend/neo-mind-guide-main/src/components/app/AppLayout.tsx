@@ -34,7 +34,8 @@ export function AppLayout() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  const refreshProfile = async () => {
+  const refreshProfile = async (optimisticUpdate?: Partial<UserProfile>) => {
+    if (optimisticUpdate) setProfile((prev) => (prev ? { ...prev, ...optimisticUpdate } : null));
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) return;
     const { data: profileData } = await supabase
@@ -42,7 +43,11 @@ export function AppLayout() {
       .select('name, brand_name, brand_logo_url, business, content_type, platform, communication_style, goal, ideal_customer, marketing_blocker, marketing_goal, priority_channel, active_channels, business_stage, customer_problem, unique_value, content_frequency, content_struggle, brand_keywords, inspiration_brands, neobot_expectation, onboarding_completed')
       .eq('id', session.user.id)
       .maybeSingle();
-    if (profileData) setProfile(profileData);
+    if (profileData) {
+      const merged = { ...profileData };
+      if (optimisticUpdate?.brand_logo_url !== undefined) merged.brand_logo_url = optimisticUpdate.brand_logo_url;
+      setProfile(merged);
+    }
   };
 
   useEffect(() => {
