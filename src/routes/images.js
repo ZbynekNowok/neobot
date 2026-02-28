@@ -156,7 +156,8 @@ function validateAndNormalizeLayers(layers, canvasWidth, canvasHeight) {
       x = Math.min(canvasWidth, Math.max(0, x));
       y = Math.min(canvasHeight, Math.max(0, y));
 
-      const color = isHexColor(raw.color) ? raw.color : "#ffffff";
+      const useAutoContrast = raw.useAutoContrast === true || raw.useAutoContrast === "true";
+      const color = useAutoContrast ? "" : (isHexColor(raw.color) ? raw.color : "#ffffff");
 
       safeLayers.push({
         type: "text",
@@ -194,7 +195,8 @@ function validateAndNormalizeLayers(layers, canvasWidth, canvasHeight) {
       if (y < 0) y = 0;
 
       const bg = isHexColor(raw.bg) ? raw.bg : "#2563eb";
-      const color = isHexColor(raw.color) ? raw.color : "#ffffff";
+      const useAutoContrast = raw.useAutoContrast === true || raw.useAutoContrast === "true";
+      const color = useAutoContrast ? "" : (isHexColor(raw.color) ? raw.color : "#ffffff");
       let radius = Number(raw.radius ?? 999);
       if (!Number.isFinite(radius)) radius = 999;
       radius = Math.min(999, Math.max(0, radius));
@@ -263,6 +265,7 @@ imagesRouter.post("/images/compose", async (req, res) => {
         textLayout,
         textPlacement,
         debug: debugPrompt,
+        clientProfile: body.clientProfile && typeof body.clientProfile === "object" ? body.clientProfile : undefined,
       },
       req.id || `compose-${Date.now()}`
     );
@@ -310,15 +313,74 @@ imagesRouter.post("/images/compose", async (req, res) => {
 });
 
 /**
+ * Build layers array from layout (percent-based) + headline, subheadline, cta texts.
+ * Used when POST body contains layout instead of pre-built layers.
+ */
+function buildLayersFromLayout(layout, headline, subheadline, cta, canvasWidth, canvasHeight) {
+  const layers = [];
+  if (layout.headline && typeof layout.headline.xPct === "number" && typeof layout.headline.yPct === "number") {
+    const h = layout.headline;
+    layers.push({
+      type: "text",
+      id: "headline",
+      text: String(headline ?? "").trim().slice(0, 80),
+      x: Math.round(h.xPct * canvasWidth),
+      y: Math.round(h.yPct * canvasHeight),
+      fontSize: Number(h.fontSize) || 40,
+      fontWeight: 800,
+      color: h.useAutoContrast ? "" : (h.color || "#ffffff"),
+      useAutoContrast: !!h.useAutoContrast,
+      align: "left",
+      maxWidthPct: 0.8,
+    });
+  }
+  if (layout.subheadline && typeof layout.subheadline.xPct === "number" && typeof layout.subheadline.yPct === "number") {
+    const s = layout.subheadline;
+    layers.push({
+      type: "text",
+      id: "subheadline",
+      text: String(subheadline ?? "").trim().slice(0, 140),
+      x: Math.round(s.xPct * canvasWidth),
+      y: Math.round(s.yPct * canvasHeight),
+      fontSize: Number(s.fontSize) || 24,
+      fontWeight: 400,
+      color: s.useAutoContrast ? "" : (s.color || "#ffffff"),
+      useAutoContrast: !!s.useAutoContrast,
+      align: "left",
+      maxWidthPct: 0.8,
+    });
+  }
+  if (layout.cta && typeof layout.cta.xPct === "number" && typeof layout.cta.yPct === "number" && typeof layout.cta.widthPct === "number" && typeof layout.cta.heightPct === "number") {
+    const c = layout.cta;
+    layers.push({
+      type: "button",
+      id: "cta",
+      text: String(cta ?? "").trim().slice(0, 32),
+      x: Math.round(c.xPct * canvasWidth),
+      y: Math.round(c.yPct * canvasHeight),
+      w: Math.round(c.widthPct * canvasWidth),
+      h: Math.round(c.heightPct * canvasHeight),
+      bg: isHexColor(c.bgColor) ? c.bgColor : "#2563eb",
+      color: c.useAutoContrast ? "" : (c.color || "#ffffff"),
+      useAutoContrast: !!c.useAutoContrast,
+      radius: Math.min(999, Math.max(0, Number(c.radius ?? c.borderRadius ?? 999))),
+    });
+  }
+  return layers;
+}
+
+/**
  * POST /api/images/compose/render
  * Re-render composite PNG from existing background + layers (no new background/LLM).
+ * Accepts either body.layers or body.layout + body.headline, body.subheadline, body.cta.
  */
 imagesRouter.post("/images/compose/render", async (req, res) => {
   const body = req.body || {};
-  const backgroundUrl = body.backgroundUrl;
+  const backgroundUrl = body.backgroundUrl || body.backgroundPath;
   const format = normalizeFormat(body.format);
   const resolution = normalizeResolution(body.resolution);
-  const layers = body.layers;
+  let layers = body.layers;
+  const layout = body.layout || body.layoutOverrides;
 
   if (!backgroundUrl || typeof backgroundUrl !== "string") {
     return res.status(400).json({
@@ -336,6 +398,29 @@ imagesRouter.post("/images/compose/render", async (req, res) => {
       ok: false,
       error: "INVALID_PARAMS",
       message: "Neplatný formát nebo rozlišení.",
+    });
+  }
+
+  if (layout && typeof layout === "object" && (layout.headline || layout.subheadline || layout.cta)) {
+    const textLayers = buildLayersFromLayout(
+      layout,
+      body.headline,
+      body.subheadline,
+      body.cta,
+      dims.outputWidth,
+      dims.outputHeight
+    );
+    layers = [
+      { type: "gradient", direction: "bottom", strength: 0.4 },
+      ...textLayers,
+    ];
+  }
+
+  if (!Array.isArray(layers)) {
+    return res.status(400).json({
+      ok: false,
+      error: "INVALID_PARAMS",
+      message: "layers nebo layout je povinný.",
     });
   }
 

@@ -1,13 +1,45 @@
 "use strict";
 
 const {
-  GLOBAL_MARKETING_BASE,
+  GLOBAL_POSITIVE_BASE,
   GLOBAL_NEGATIVE_BASE,
   CREATIVE_VARIATION_SEEDS,
 } = require("../config/masterPrompt.js");
 const { INDUSTRY_PROMPTS } = require("../config/industryPrompts.js");
+const { getHeroLock, getHeroLockKey } = require("../config/heroLocks.js");
+const { getClientProfile } = require("./clientProfile.js");
 
 const DEBUG_MASTER = process.env.DEBUG === "1" || process.env.DEBUG_COMPOSE === "1";
+
+// Last build debug info for _debug in API responses (dev mode)
+let lastBuildDebug = { industryUsed: null, heroLockUsed: null };
+
+function setLastBuildDebug(industryUsed, heroLockUsed) {
+  lastBuildDebug = { industryUsed, heroLockUsed };
+}
+
+function getLastBuildDebug() {
+  return { ...lastBuildDebug };
+}
+
+/**
+ * Normalize input from client profile, user prompt, and optional industry override.
+ * @param {{ clientProfile?: object, userPrompt?: string, industry?: string }}
+ * @returns {{ resolvedIndustry: string, resolvedTopicKeywords: string }}
+ */
+function normalizeInput({ clientProfile = {}, userPrompt = "", industry: industryOverride } = {}) {
+  const fallbackIndustry =
+    typeof clientProfile === "object" && clientProfile.industry
+      ? clientProfile.industry
+      : industryOverride || "general";
+  const resolved = getClientProfile(
+    clientProfile && typeof clientProfile === "object" ? clientProfile : {},
+    fallbackIndustry
+  );
+  const resolvedIndustry = industryOverride || resolved.industry || "general";
+  const resolvedTopicKeywords = (userPrompt && String(userPrompt).trim()) || "";
+  return { resolvedIndustry, resolvedTopicKeywords };
+}
 
 function pickCreativeVariation(variationKey) {
   if (!variationKey || CREATIVE_VARIATION_SEEDS.length === 0) {
@@ -25,44 +57,55 @@ function pickCreativeVariation(variationKey) {
 }
 
 /**
- * Build the master image prompt for SDXL (and any image generation).
- * Ensures marketing quality, anti-repetition, and industry lock.
+ * Build the master image prompt for all image generation (backgrounds, ads, product variants).
+ * Composes: GLOBAL_POSITIVE_BASE + industry (environments, lighting) + HERO_LOCK.required + userPrompt + variation + "Strictly stay within [industry] context".
  *
  * @param {object} opts
  * @param {object} opts.clientProfile - { industry, brandName, style, targetAudience, colors, industryLock }
- * @param {string} opts.campaignPrompt - User/LLM campaign or scene description
- * @param {string} opts.industry - Override industry (default from clientProfile.industry)
+ * @param {string} opts.userPrompt - Campaign brief / scene description (alias: campaignPrompt)
+ * @param {string} opts.industry - Override industry
  * @param {string} opts.imageMode - "background" | "img2img" | "ads"
- * @param {string} opts.variationKey - e.g. requestId-i for batch anti-repeat
+ * @param {string} opts.variationKey - For anti-repeat (e.g. requestId-i)
  * @param {string} opts.placementHint - Copy-space hint (e.g. for background mode)
  */
 function buildMasterImagePrompt(opts) {
   const {
     clientProfile = {},
-    campaignPrompt = "",
+    userPrompt,
+    campaignPrompt,
     industry: industryOverride,
     imageMode = "background",
     variationKey,
     placementHint,
   } = opts || {};
 
+  const userBrief = (userPrompt != null ? userPrompt : campaignPrompt) != null
+    ? String(userPrompt != null ? userPrompt : campaignPrompt).trim()
+    : "";
+
   const industry = industryOverride || clientProfile.industry || "general";
+  const heroLockKey = getHeroLockKey(industry);
+  const heroLock = getHeroLock(industry);
   const ind = INDUSTRY_PROMPTS[industry] || INDUSTRY_PROMPTS.general;
+
+  setLastBuildDebug(industry, heroLockKey);
 
   const parts = [];
 
-  parts.push(GLOBAL_MARKETING_BASE);
-
+  parts.push(GLOBAL_POSITIVE_BASE);
   parts.push(ind.environments);
   parts.push(ind.lighting);
   parts.push(ind.heroSubjects);
+  parts.push(heroLock.required);
 
-  if (campaignPrompt && String(campaignPrompt).trim()) {
-    parts.push(String(campaignPrompt).trim());
+  if (userBrief) {
+    parts.push(userBrief);
   }
 
-  parts.push("No duplicated items, no rows of identical products, no grid. Unique single composition.");
-  parts.push(`Strictly stay within ${industry} context. Do not switch industries.`);
+  const variation = pickCreativeVariation(variationKey);
+  parts.push(variation);
+
+  parts.push(`Strictly stay within ${industry} context.`);
 
   if (clientProfile.brandName) {
     parts.push(`Brand: ${clientProfile.brandName}.`);
@@ -73,9 +116,6 @@ function buildMasterImagePrompt(opts) {
   if (Array.isArray(clientProfile.colors) && clientProfile.colors.length > 0) {
     parts.push(`Brand colors: ${clientProfile.colors.slice(0, 5).join(", ")}.`);
   }
-
-  const variation = pickCreativeVariation(variationKey);
-  parts.push(variation);
 
   if (placementHint && String(placementHint).trim()) {
     parts.push(String(placementHint).trim());
@@ -91,28 +131,31 @@ function buildMasterImagePrompt(opts) {
   const finalPrompt = parts.join(". ");
 
   if (DEBUG_MASTER) {
-    console.log("[masterPrompt] industry:", industry, "imageMode:", imageMode, "variationKey:", variationKey, "variation:", variation.slice(0, 50) + "...");
+    console.log("[masterPrompt] industry:", industry, "heroLock:", heroLockKey, "imageMode:", imageMode, "variationKey:", variationKey);
   }
 
   return finalPrompt;
 }
 
 /**
- * Build master negative prompt (industry-aware, no text, anti-repeat).
+ * Build master negative prompt: GLOBAL_NEGATIVE_BASE + HERO_LOCK.forbidden + industry prohibited.
  *
  * @param {object} opts
  * @param {object} opts.clientProfile - { industry }
  * @param {string} opts.industry - Override
  * @param {string} opts.imageMode - "background" | "img2img" | "ads"
- * @param {string} opts.textLayout - Optional; for flyer/balanced
+ * @param {string} opts.textLayout - Optional
  */
 function buildMasterNegativePrompt(opts) {
   const { clientProfile = {}, industry: industryOverride, imageMode, textLayout } = opts || {};
   const industry = industryOverride || clientProfile.industry || "general";
+  const heroLockKey = getHeroLockKey(industry);
+  const heroLock = getHeroLock(industry);
   const ind = INDUSTRY_PROMPTS[industry] || INDUSTRY_PROMPTS.general;
 
-  const parts = [GLOBAL_NEGATIVE_BASE];
+  setLastBuildDebug(industry, heroLockKey);
 
+  const parts = [GLOBAL_NEGATIVE_BASE, heroLock.forbidden];
   if (ind.prohibited) {
     parts.push(ind.prohibited);
   }
@@ -121,7 +164,9 @@ function buildMasterNegativePrompt(opts) {
 }
 
 module.exports = {
+  normalizeInput,
   buildMasterImagePrompt,
   buildMasterNegativePrompt,
+  getLastBuildDebug,
   pickCreativeVariation,
 };

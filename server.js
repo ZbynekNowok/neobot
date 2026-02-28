@@ -106,6 +106,20 @@ try {
   console.warn("adsStudioRouter not loaded:", e.message);
 }
 
-app.listen(PORT, () => {
-  console.log("Server listening on port", PORT);
+// SPA frontend (neo-mind-guide) – servíruj dist a fallback na index.html
+const frontendDist = path.join(__dirname, "frontend", "neo-mind-guide-main", "dist");
+if (fs.existsSync(frontendDist)) {
+  app.use(express.static(frontendDist));
+  app.get(/^\/(?!api\/).*/, (req, res, next) => {
+    if (req.accepts("html")) {
+      res.sendFile(path.join(frontendDist, "index.html"));
+    } else {
+      next();
+    }
+  });
+}
+
+const HOST = process.env.HOST || "0.0.0.0";
+app.listen(PORT, HOST, () => {
+  console.log(`Server listening on http://${HOST}:${PORT}`);
 });

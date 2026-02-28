@@ -112,6 +112,43 @@ function drawPanelLayer(ctx, layer, width, height) {
   ctx.restore();
 }
 
+/**
+ * Compute average luminance of an ImageData region (0–255).
+ * luminance = 0.299*R + 0.587*G + 0.114*B
+ */
+function averageLuminance(imageData) {
+  const data = imageData.data;
+  let sum = 0;
+  let count = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    const a = data[i + 3];
+    if (a < 128) continue; // skip very transparent pixels
+    sum += 0.299 * r + 0.587 * g + 0.114 * b;
+    count += 1;
+  }
+  return count > 0 ? sum / count : 128;
+}
+
+/**
+ * Get average luminance of a rectangle on the canvas (auto-contrast for text).
+ * Uses ctx.getImageData and 0.299*R + 0.587*G + 0.114*B per pixel.
+ * @returns {number} 0–255, or 128 if region invalid
+ */
+function getAverageLuminance(ctx, x, y, w, h) {
+  const sx = Math.max(0, Math.floor(x));
+  const sy = Math.max(0, Math.floor(y));
+  const sw = Math.max(1, Math.floor(w));
+  const sh = Math.max(1, Math.floor(h));
+  const width = ctx.canvas.width;
+  const height = ctx.canvas.height;
+  if (sx + sw > width || sy + sh > height) return 128;
+  const imageData = ctx.getImageData(sx, sy, sw, sh);
+  return averageLuminance(imageData);
+}
+
 function drawTextLayer(ctx, layer, width, height) {
   const text = String(layer.text || "").trim();
   if (!text) return;
@@ -122,22 +159,26 @@ function drawTextLayer(ctx, layer, width, height) {
   const maxWidthPct = clamp(Number(layer.maxWidthPct || 0.8), 0.3, 0.95);
   const maxWidth = width * maxWidthPct;
 
-  let color = typeof layer.color === "string" && layer.color.trim() ? layer.color.trim() : "#ffffff";
-
-  let x = clamp(Number(layer.x || 80), 0, width);
-  let y = clamp(Number(layer.y || height * 0.7), 0, height);
+  let x, y;
+  if (layer.xPct != null) {
+    const pct = layer.xPct <= 1 ? layer.xPct : layer.xPct / 100;
+    x = width * pct;
+  } else {
+    x = Number(layer.x ?? 80);
+  }
+  if (layer.yPct != null) {
+    const pct = layer.yPct <= 1 ? layer.yPct : layer.yPct / 100;
+    y = height * pct;
+  } else {
+    y = Number(layer.y ?? height * 0.7);
+  }
+  x = clamp(x, 0, width);
+  y = clamp(y, 0, height);
 
   ctx.save();
   ctx.font = `${fontWeight} ${fontSize}px Inter, sans-serif`;
   ctx.textAlign = align;
   ctx.textBaseline = "alphabetic";
-
-  ctx.shadowColor = "rgba(0,0,0,0.8)";
-  ctx.shadowBlur = 10;
-  ctx.shadowOffsetX = 0;
-  ctx.shadowOffsetY = 2;
-
-  ctx.fillStyle = color;
 
   const lines = wordWrapLines(ctx, text, maxWidth);
   const lineHeight = fontSize * 1.2;
@@ -150,6 +191,48 @@ function drawTextLayer(ctx, layer, width, height) {
   } else {
     drawX = clamp(x, 0, width - maxWidth);
   }
+
+  const sampleLeft = align === "center" ? drawX - maxWidth / 2 : align === "right" ? drawX - maxWidth : drawX;
+  const sampleTop = y - fontSize;
+  const sampleWidth = maxWidth;
+  const sampleHeight = lines.length * lineHeight + fontSize * 0.5;
+
+  const hasManualColor = typeof layer.color === "string" && String(layer.color).trim().length > 0;
+  let color;
+  if (hasManualColor) {
+    color = String(layer.color).trim();
+  } else {
+    const luminance = getAverageLuminance(ctx, sampleLeft, sampleTop, sampleWidth, sampleHeight);
+    color = luminance > 160 ? "#111111" : "#ffffff";
+  }
+
+  function isColorDark(hex) {
+    const s = String(hex).trim().replace(/^#/, "");
+    if (s.length !== 3 && s.length !== 6) return false;
+    let r, g, b;
+    if (s.length === 3) {
+      r = parseInt(s[0] + s[0], 16);
+      g = parseInt(s[1] + s[1], 16);
+      b = parseInt(s[2] + s[2], 16);
+    } else {
+      r = parseInt(s.slice(0, 2), 16);
+      g = parseInt(s.slice(2, 4), 16);
+      b = parseInt(s.slice(4, 6), 16);
+    }
+    if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) return false;
+    const L = 0.299 * r + 0.587 * g + 0.114 * b;
+    return L < 160;
+  }
+  const useWhiteShadow = isColorDark(color);
+  if (useWhiteShadow) {
+    ctx.shadowColor = "rgba(255,255,255,0.35)";
+  } else {
+    ctx.shadowColor = "rgba(0,0,0,0.45)";
+  }
+  ctx.shadowBlur = 10;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 2;
+  ctx.fillStyle = color;
 
   let drawY = y;
   for (const line of lines) {
@@ -165,8 +248,21 @@ function drawButtonLayer(ctx, layer, width, height) {
   const text = String(layer.text || "").trim();
   if (!text) return;
 
-  let x = clamp(Number(layer.x || 80), 0, width);
-  let y = clamp(Number(layer.y || height * 0.8), 0, height);
+  let x, y;
+  if (layer.xPct != null) {
+    const pct = layer.xPct <= 1 ? layer.xPct : layer.xPct / 100;
+    x = width * pct;
+  } else {
+    x = Number(layer.x ?? 80);
+  }
+  if (layer.yPct != null) {
+    const pct = layer.yPct <= 1 ? layer.yPct : layer.yPct / 100;
+    y = height * pct;
+  } else {
+    y = Number(layer.y ?? height * 0.8);
+  }
+  x = clamp(x, 0, width);
+  y = clamp(y, 0, height);
   const w = clamp(Number(layer.w || 260), 120, Math.min(900, width));
   const h = clamp(Number(layer.h || 56), 40, Math.min(220, height));
   const radius = clamp(Number(layer.radius ?? 999), 0, 999);

@@ -4,8 +4,9 @@ const path = require("path");
 const { generateBackground } = require("../imageProviders");
 const { llmChat } = require("../llm/llmGateway.js");
 const { renderComposite, measureTextBlock } = require("../render/canvasRenderer.js");
-const { pickBestPlacementFromImage } = require("./copySpace.js");
+const { pickBestPlacementFromImage, getZoneClutterScores, ZONE_REGIONS } = require("./copySpace.js");
 const { buildMasterImagePrompt, buildMasterNegativePrompt } = require("./masterPromptBuilder.js");
+const { getClientProfile } = require("./clientProfile.js");
 
 const PUBLIC_DIR = path.join(__dirname, "../../public");
 
@@ -65,6 +66,8 @@ function getCanvasDimensions(formatInput, resolutionInput) {
 const DEBUG_COMPOSE = process.env.DEBUG === "1" || process.env.DEBUG_COMPOSE === "1";
 
 const INDUSTRY_OBJECTS = {
+  automotive: "car as dominant hero, detailing studio, polishing, ceramic coating, paint reflections",
+  detailing: "car as dominant hero, detailing studio, polishing, ceramic coating, paint reflections",
   fashion: "elegant female model wearing modern outfit, boutique interior, clothing rack",
   construction: "construction helmet, laptop with spreadsheet, architectural blueprints, construction site",
   real_estate: "modern house exterior, architectural model, real estate office",
@@ -80,6 +83,7 @@ const INDUSTRY_OBJECTS = {
  */
 function detectIndustry(prompt) {
   const p = (prompt && String(prompt).toLowerCase()) || "";
+  if (/\b(auto|automotive|detailing|auto detailing|car|vozidlo|lak|politura|ceramic|car wash|mytí aut)\b/.test(p)) return "automotive";
   if (/\b(móda|fashion|butik|oblečen|šaty|sukně|kabát|kolekce|outfit|dámsk|pánsk|oděv)\b/.test(p)) return "fashion";
   if (/\b(stavba|stavebn[ií]|stavebn[ií]ch|rozpočet|rozpočty|projekt|úrs|rts|architekt|blueprint|výkres|stavebnictv)\b/.test(p)) return "construction";
   if (/\b(realit|nemovitost|pronájem|prodej byt|dům na prodej|architektura)\b/.test(p)) return "real_estate";
@@ -126,17 +130,22 @@ const COPY_SPACE_BY_PLACEMENT = {
 };
 
 /**
- * Build background prompt via Master Image Prompt Engine (marketing quality, industry lock, anti-repeat).
+ * Returns params for generateBackground (Master Prompt Engine): clientProfile, industry, campaignPrompt, placementHint.
+ * Used by compose to pass into replicate so prompt is always built via master.
  */
-function buildBackgroundPrompt(opts) {
-  const { userPrompt, topic, style, palette, purpose, brand, textLayout, textPlacement } = opts || {};
+function getBackgroundPromptParams(opts) {
+  const { userPrompt, topic, style, palette, purpose, brand, textLayout, textPlacement, clientProfile: clientProfileFromReq } = opts || {};
   const brief = (userPrompt && String(userPrompt).trim()) || "professional marketing visual";
-  const industry = detectIndustry(brief);
+  const detectedIndustry = detectIndustry(brief);
+  const effectiveIndustry = (clientProfileFromReq && clientProfileFromReq.industryLock && clientProfileFromReq.industry)
+    ? getClientProfile(clientProfileFromReq, detectedIndustry).industry
+    : detectedIndustry;
+  const industry = effectiveIndustry;
   const objects = INDUSTRY_OBJECTS[industry] || INDUSTRY_OBJECTS.general;
-  const layoutMode = textLayout === "balanced" || textLayout === "visual" ? textLayout : "flyer";
+  const layoutMode = textLayout === "auto" || textLayout === "balanced" || textLayout === "visual" ? (textLayout === "auto" ? "auto" : textLayout) : "flyer";
   const placementText =
-    textPlacement === "auto"
-      ? "large clean copy space for headline and text, low clutter areas"
+    textPlacement === "auto" || textLayout === "auto"
+      ? "varied clean copy space for text (top, bottom, or side), low clutter areas, flexible composition"
       : (COPY_SPACE_BY_PLACEMENT[textPlacement] || COPY_SPACE_BY_PLACEMENT.bottom_left);
 
   const styleMap = {
@@ -161,29 +170,53 @@ function buildBackgroundPrompt(opts) {
 
   const placementHint = layoutMode === "flyer" ? `${placementText}. Low clutter.` : null;
 
-  const clientProfile = {
-    industry,
-    brandName: brand && brand.name ? brand.name : null,
-    colors: brand && Array.isArray(brand.colors) ? brand.colors : null,
-  };
+  const clientProfile = clientProfileFromReq && typeof clientProfileFromReq === "object"
+    ? {
+        industry: getClientProfile(clientProfileFromReq, detectedIndustry).industry,
+        brandName: clientProfileFromReq.brandName || (brand && brand.name) || null,
+        style: clientProfileFromReq.style || clientProfileFromReq.brandStyle || null,
+        targetAudience: clientProfileFromReq.targetAudience || null,
+        colors: Array.isArray(clientProfileFromReq.colors) ? clientProfileFromReq.colors : (brand && Array.isArray(brand.colors) ? brand.colors : null),
+        industryLock: Boolean(clientProfileFromReq.industryLock),
+      }
+    : {
+        industry,
+        brandName: brand && brand.name ? brand.name : null,
+        colors: brand && Array.isArray(brand.colors) ? brand.colors : null,
+      };
 
-  return buildMasterImagePrompt({
+  return {
     clientProfile,
-    campaignPrompt: campaignParts.join(". "),
     industry,
+    campaignPrompt: campaignParts.join(". "),
+    placementHint,
+  };
+}
+
+/**
+ * Build background prompt via Master Image Prompt Engine (marketing quality, industry lock, anti-repeat).
+ * When opts.clientProfile is provided (from req.body), it is passed through to buildMasterImagePrompt.
+ */
+function buildBackgroundPrompt(opts) {
+  const params = getBackgroundPromptParams(opts);
+  return buildMasterImagePrompt({
+    ...params,
     imageMode: "background",
     variationKey: `compose-bg-${Date.now()}`,
-    placementHint,
   });
 }
 
 /**
  * Negative prompt via Master Image Prompt Engine (industry-aware, no text, anti-repeat).
+ * When clientProfileFromReq is provided, its industry is used.
  */
-function buildNegativePrompt(industry, textLayout) {
+function buildNegativePrompt(industry, textLayout, clientProfileFromReq) {
+  const effectiveIndustry = (clientProfileFromReq && clientProfileFromReq.industryLock && clientProfileFromReq.industry)
+    ? getClientProfile(clientProfileFromReq, industry).industry
+    : (industry || "general");
   return buildMasterNegativePrompt({
-    clientProfile: { industry: industry || "general" },
-    industry: industry || "general",
+    clientProfile: { industry: effectiveIndustry },
+    industry: effectiveIndustry,
     imageMode: "background",
     textLayout: textLayout || null,
   });
@@ -294,6 +327,8 @@ const SUBHEADLINE_FONT_SIZES = [32, 28, 24];
 const GAP = 16;
 const CTA_HEIGHT = 64;
 const CTA_GAP = 24;
+const ZONE_PADDING = 24;
+const CTA_WIDTH = 280;
 
 /**
  * Stack headline, subheadline, CTA in safe area without overlap. Reduces font sizes if needed.
@@ -386,13 +421,170 @@ function layoutStackedText({ placement, canvasW, canvasH, headline, subheadline,
   return layers;
 }
 
+/**
+ * Build layers for AI multi-zone layout: headline, subheadline, CTA in different zones.
+ * No overlaps: measure text + safe paddings per zone.
+ * CTA prefers bottom_band; headline gets best zone; subheadline with headline or third zone.
+ */
+function layoutMultiZoneAuto({ zoneAssignments, canvasW, canvasH, headline, subheadline, cta }) {
+  const { headlineZone, subheadlineZone, ctaZone } = zoneAssignments;
+  const headlineText = String(headline || "").trim();
+  const subheadlineText = String(subheadline || "").trim();
+  const ctaText = String(cta || "").trim();
+  const layers = [];
+
+  function zoneBounds(zoneName) {
+    const r = ZONE_REGIONS[zoneName];
+    if (!r) return null;
+    return {
+      x: Math.round(canvasW * r.xPct) + ZONE_PADDING,
+      y: Math.round(canvasH * r.yPct) + ZONE_PADDING,
+      w: Math.round(canvasW * r.wPct) - ZONE_PADDING * 2,
+      h: Math.round(canvasH * r.hPct) - ZONE_PADDING * 2,
+      align: r.align || "left",
+    };
+  }
+
+  let headlineY, headlineH, subheadlineY, subheadlineH;
+  const hBounds = zoneBounds(headlineZone);
+  if (hBounds && headlineText) {
+    let bestSize = HEADLINE_FONT_SIZES[HEADLINE_FONT_SIZES.length - 1];
+    for (let i = 0; i < HEADLINE_FONT_SIZES.length; i++) {
+      const meas = measureTextBlock(headlineText, hBounds.w, HEADLINE_FONT_SIZES[i], 800);
+      headlineH = meas.height;
+      if (meas.height <= hBounds.h - GAP * 2) {
+        bestSize = HEADLINE_FONT_SIZES[i];
+        break;
+      }
+    }
+    headlineY = hBounds.y;
+    layers.push({
+      type: "text",
+      id: "headline",
+      text: headlineText,
+      x: hBounds.x,
+      y: headlineY,
+      fontSize: bestSize,
+      fontWeight: 800,
+      color: "#ffffff",
+      align: hBounds.align,
+      maxWidthPct: hBounds.w / canvasW,
+    });
+  }
+
+  if (subheadlineZone === headlineZone && hBounds && subheadlineText) {
+    const sBounds = hBounds;
+    const usedY = (headlineY ?? sBounds.y) + (headlineH ?? 0) + GAP;
+    let bestSize = SUBHEADLINE_FONT_SIZES[SUBHEADLINE_FONT_SIZES.length - 1];
+    for (let i = 0; i < SUBHEADLINE_FONT_SIZES.length; i++) {
+      const meas = measureTextBlock(subheadlineText, sBounds.w, SUBHEADLINE_FONT_SIZES[i], 400);
+      subheadlineH = meas.height;
+      if (usedY + meas.height + GAP <= sBounds.y + sBounds.h) {
+        bestSize = SUBHEADLINE_FONT_SIZES[i];
+        break;
+      }
+    }
+    subheadlineY = usedY;
+    layers.push({
+      type: "text",
+      id: "subheadline",
+      text: subheadlineText,
+      x: sBounds.x,
+      y: subheadlineY,
+      fontSize: bestSize,
+      fontWeight: 400,
+      color: "#e5e7eb",
+      align: sBounds.align,
+      maxWidthPct: sBounds.w / canvasW,
+    });
+  } else if (subheadlineText) {
+    const sBounds = zoneBounds(subheadlineZone);
+    if (sBounds) {
+      let bestSize = SUBHEADLINE_FONT_SIZES[SUBHEADLINE_FONT_SIZES.length - 1];
+      for (let i = 0; i < SUBHEADLINE_FONT_SIZES.length; i++) {
+        const meas = measureTextBlock(subheadlineText, sBounds.w, SUBHEADLINE_FONT_SIZES[i], 400);
+        if (meas.height <= sBounds.h - GAP) {
+          bestSize = SUBHEADLINE_FONT_SIZES[i];
+          break;
+        }
+      }
+      layers.push({
+        type: "text",
+        id: "subheadline",
+        text: subheadlineText,
+        x: sBounds.x,
+        y: sBounds.y,
+        fontSize: bestSize,
+        fontWeight: 400,
+        color: "#e5e7eb",
+        align: sBounds.align,
+        maxWidthPct: sBounds.w / canvasW,
+      });
+    }
+  }
+
+  if (ctaText) {
+    const cBounds = zoneBounds(ctaZone);
+    if (cBounds) {
+      let ctaX = cBounds.x;
+      let ctaY = cBounds.y + cBounds.h - CTA_HEIGHT - ZONE_PADDING;
+      if (ctaZone === "bottom_band") {
+        ctaY = Math.round(canvasH * ZONE_REGIONS.bottom_band.yPct) + ZONE_PADDING;
+      }
+      if (cBounds.align === "center") {
+        ctaX = cBounds.x + Math.max(0, Math.floor((cBounds.w - CTA_WIDTH) / 2));
+      }
+      ctaX = Math.min(ctaX, canvasW - CTA_WIDTH - ZONE_PADDING);
+      ctaY = Math.max(ZONE_PADDING, Math.min(ctaY, canvasH - CTA_HEIGHT - ZONE_PADDING));
+      layers.push({
+        type: "button",
+        id: "cta",
+        text: ctaText,
+        x: ctaX,
+        y: ctaY,
+        w: CTA_WIDTH,
+        h: CTA_HEIGHT,
+        bg: "#2563eb",
+        color: "#ffffff",
+        radius: 999,
+      });
+    }
+  }
+
+  return layers;
+}
+
 function buildLayersFromLayout(layout, dims, opts) {
   const { outputWidth: width, outputHeight: height } = dims;
-  const textLayout = (opts && opts.textLayout) === "balanced" || (opts && opts.textLayout) === "visual" ? opts.textLayout : "flyer";
+  const textLayout = opts && opts.textLayout;
+  const isAuto = textLayout === "auto";
   const textPlacement =
     (opts && opts.textPlacement && SAFE_AREA_BY_PLACEMENT[opts.textPlacement]) ? opts.textPlacement : "bottom_left";
 
   const layers = [];
+
+  if (isAuto) {
+    layers.push({
+      type: "gradient",
+      direction: "bottom",
+      strength: 0.4,
+    });
+    const zoneAssignments = opts.zoneAssignments || {
+      headlineZone: "top_band",
+      subheadlineZone: "top_band",
+      ctaZone: "bottom_band",
+    };
+    const multiLayers = layoutMultiZoneAuto({
+      zoneAssignments,
+      canvasW: width,
+      canvasH: height,
+      headline: layout && layout.headline,
+      subheadline: layout && layout.subheadline,
+      cta: layout && layout.cta,
+    });
+    layers.push(...multiLayers);
+    return layers;
+  }
 
   if (textLayout === "flyer") {
     layers.push({ type: "panel", opacity: 0.65 });
@@ -425,14 +617,17 @@ async function composeImageWithText(options, requestId) {
 
   const userPrompt = (options.prompt && String(options.prompt).trim()) || "";
   const topic = detectTopic(userPrompt, options.brand);
-  const textLayout = options.textLayout === "balanced" || options.textLayout === "visual" ? options.textLayout : "flyer";
+  const textLayout = options.textLayout === "auto" || options.textLayout === "balanced" || options.textLayout === "visual" ? options.textLayout : "flyer";
   const requestedPlacement =
     options.textPlacement === "auto" || (options.textPlacement && (COPY_SPACE_BY_PLACEMENT[options.textPlacement] || SAFE_AREA_BY_PLACEMENT[options.textPlacement]))
       ? options.textPlacement
       : "bottom_left";
-  const industry = detectIndustry(userPrompt || "");
+  const detectedIndustry = detectIndustry(userPrompt || "");
+  const effectiveIndustry = (options.clientProfile && options.clientProfile.industryLock && options.clientProfile.industry)
+    ? getClientProfile(options.clientProfile, detectedIndustry).industry
+    : detectedIndustry;
 
-  const bgPrompt = buildBackgroundPrompt({
+  const bgParams = getBackgroundPromptParams({
     userPrompt: userPrompt || "professional marketing visual",
     topic,
     style: options.style,
@@ -441,25 +636,25 @@ async function composeImageWithText(options, requestId) {
     brand: options.brand,
     textLayout,
     textPlacement: requestedPlacement,
+    clientProfile: options.clientProfile,
   });
-  const negativePrompt = buildNegativePrompt(industry, textLayout);
 
   if (DEBUG_COMPOSE) {
-    console.log("[compose] industry:", industry, "topic:", topic, "textLayout:", textLayout, "textPlacement:", requestedPlacement);
-    console.log("[compose] bgPrompt (first 200 chars):", bgPrompt.slice(0, 200) + (bgPrompt.length > 200 ? "…" : ""));
-    console.log("[compose] negPrompt:", negativePrompt.slice(0, 150) + (negativePrompt.length > 150 ? "…" : ""));
+    console.log("[compose] industry:", effectiveIndustry, "topic:", topic, "textLayout:", textLayout, "textPlacement:", requestedPlacement);
   }
 
   const bgJobId = `compose-bg-${requestId || Date.now()}`;
   const bgResult = await generateBackground({
-    prompt: bgPrompt,
-    negativePrompt,
+    ...bgParams,
+    imageMode: "background",
+    variationKey: `compose-bg-${requestId || Date.now()}`,
     width: dims.generateWidth,
     height: dims.generateHeight,
     outputWidth: dims.outputWidth,
     outputHeight: dims.outputHeight,
     jobId: bgJobId,
     resolution,
+    debug: options.debug,
   });
 
   const backgroundUrl = bgResult.publicUrl;
@@ -468,8 +663,44 @@ async function composeImageWithText(options, requestId) {
     backgroundUrl.replace(/^\/+/, "")
   );
 
+  if (options.backgroundOnly) {
+    return {
+      background: {
+        url: backgroundUrl,
+        width: bgResult.width || dims.outputWidth,
+        height: bgResult.height || dims.outputHeight,
+        resolution,
+      },
+    };
+  }
+
   let effectivePlacement = requestedPlacement;
-  if (requestedPlacement === "auto") {
+  let zoneAssignments = null;
+
+  if (textLayout === "auto") {
+    try {
+      const { scores, centerAllowed } = await getZoneClutterScores(backgroundPath);
+      const zoneNames = ["top_band", "bottom_band", "right_panel"];
+      if (centerAllowed) zoneNames.push("center");
+      const sorted = zoneNames
+        .map((z) => ({ zone: z, score: scores[z] != null ? scores[z] : Infinity }))
+        .sort((a, b) => a.score - b.score);
+      const best = sorted[0]?.zone || "top_band";
+      const second = sorted[1]?.zone || "bottom_band";
+      const third = sorted[2]?.zone || "right_panel";
+      const ctaPreferBottom = sorted.some((s) => s.zone === "bottom_band");
+      const ctaZone = ctaPreferBottom ? "bottom_band" : (second === "center" ? third : second) || "bottom_band";
+      const headlineZone = best;
+      const subheadlineZone = headlineZone;
+      zoneAssignments = { headlineZone, subheadlineZone, ctaZone };
+      if (DEBUG_COMPOSE) {
+        console.log("[compose] AI multi-zone:", zoneAssignments, "scores:", scores);
+      }
+    } catch (err) {
+      if (DEBUG_COMPOSE) console.warn("[compose] zone scoring failed, using default zones:", err?.message);
+      zoneAssignments = { headlineZone: "top_band", subheadlineZone: "top_band", ctaZone: "bottom_band" };
+    }
+  } else if (requestedPlacement === "auto") {
     try {
       const result = await pickBestPlacementFromImage(backgroundPath, textLayout);
       effectivePlacement = result.placement;
@@ -519,7 +750,11 @@ async function composeImageWithText(options, requestId) {
     parsed = safeParseLayoutJson(llmRes.output_text || "");
   }
 
-  const layers = buildLayersFromLayout(parsed, dims, { textLayout, textPlacement: effectivePlacement });
+  const layers = buildLayersFromLayout(parsed, dims, {
+    textLayout,
+    textPlacement: effectivePlacement,
+    zoneAssignments,
+  });
 
   const compositesDir = path.join(PUBLIC_DIR, "outputs/composites");
   const fileName = `compose-${requestId || Date.now()}.png`;
@@ -554,8 +789,8 @@ async function composeImageWithText(options, requestId) {
     format,
     resolution,
   };
-  if (options.debug) {
-    result._debug = { prompt: bgPrompt, negativePrompt };
+  if (options.debug && bgResult._debug) {
+    result._debug = bgResult._debug;
   }
   return result;
 }

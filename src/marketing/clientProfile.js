@@ -7,6 +7,8 @@
  */
 
 const NORMALIZED_INDUSTRIES = [
+  "automotive",
+  "detailing",
   "fashion",
   "construction",
   "real_estate",

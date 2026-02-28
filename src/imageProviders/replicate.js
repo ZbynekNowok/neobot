@@ -3,7 +3,7 @@ const fetch = require("node-fetch");
 const fs = require("fs");
 const path = require("path");
 const sharp = require("sharp");
-const { buildMasterImagePrompt, buildMasterNegativePrompt } = require("../marketing/masterPromptBuilder.js");
+const { buildMasterImagePrompt, buildMasterNegativePrompt, getLastBuildDebug } = require("../marketing/masterPromptBuilder.js");
 
 const MODEL_ID = "stability-ai/sdxl:39ed52f2a78e934b3ba6e2a89f5b1c712de7dfea535525255b1aa35c5565e08b";
 const GENERATION_TIMEOUT_MS = 120000;
@@ -73,33 +73,25 @@ async function generateBackground(params) {
     textLayout,
   } = params || {};
 
-  const useMaster =
-    campaignPrompt != null || (clientProfile && typeof clientProfile === "object") || (industry && typeof industry === "string");
-  let prompt;
-  let negativePrompt;
-  if (useMaster) {
-    const profile = clientProfile && typeof clientProfile === "object"
-      ? clientProfile
-      : { industry: industry || "general" };
-    prompt = buildMasterImagePrompt({
-      clientProfile: profile,
-      campaignPrompt: campaignPrompt != null ? String(campaignPrompt) : legacyPrompt || "",
-      industry: industry || profile.industry,
-      imageMode: imageMode || "background",
-      variationKey: variationKey || jobId,
-      placementHint: placementHint || null,
-    });
-    negativePrompt = buildMasterNegativePrompt({
-      clientProfile: profile,
-      industry: industry || profile.industry,
-      imageMode: imageMode || "background",
-      textLayout: textLayout || null,
-    });
-  } else {
-    if (!legacyPrompt || !jobId) throw new Error("Prompt and jobId required");
-    prompt = legacyPrompt;
-    negativePrompt = legacyNegative;
-  }
+  const profile = clientProfile && typeof clientProfile === "object"
+    ? clientProfile
+    : { industry: industry || "general" };
+  const userPrompt = campaignPrompt != null ? String(campaignPrompt) : (legacyPrompt || "");
+  let prompt = buildMasterImagePrompt({
+    clientProfile: profile,
+    userPrompt: userPrompt || "professional marketing visual",
+    campaignPrompt: userPrompt,
+    industry: industry || profile.industry,
+    imageMode: imageMode || "background",
+    variationKey: variationKey || jobId,
+    placementHint: placementHint || null,
+  });
+  let negativePrompt = buildMasterNegativePrompt({
+    clientProfile: profile,
+    industry: industry || profile.industry,
+    imageMode: imageMode || "background",
+    textLayout: textLayout || null,
+  });
 
   if (!jobId) throw new Error("jobId required");
   const apiToken = process.env.REPLICATE_API_TOKEN;
@@ -174,7 +166,7 @@ async function generateBackground(params) {
   const filePath = path.join(outputsDir, `${jobId}.png`);
   fs.writeFileSync(filePath, resizedBuffer);
 
-  return {
+  const result = {
     publicUrl: `/outputs/backgrounds/${jobId}.png`,
     width: targetWidth,
     height: targetHeight,
@@ -182,6 +174,11 @@ async function generateBackground(params) {
     steps: input.num_inference_steps,
     resolution: resolution || undefined,
   };
+  if (params.debug) {
+    const { industryUsed, heroLockUsed } = getLastBuildDebug();
+    result._debug = { industryUsed, heroLockUsed, prompt, negativePrompt };
+  }
+  return result;
 }
 
 /**
@@ -207,28 +204,23 @@ async function generateFromImage(params) {
   const apiToken = process.env.REPLICATE_API_TOKEN;
   if (!apiToken) throw new Error("REPLICATE_API_TOKEN not set");
 
-  const useMaster =
-    (params.clientProfile && typeof params.clientProfile === "object") || (params.industry && typeof params.industry === "string");
-  let finalPrompt = prompt;
-  let finalNegative = negativePrompt;
-  if (useMaster) {
-    const profile = params.clientProfile && typeof params.clientProfile === "object"
-      ? params.clientProfile
-      : { industry: params.industry || "general" };
-    finalPrompt = buildMasterImagePrompt({
-      clientProfile: profile,
-      campaignPrompt: prompt || "Professional product in scene",
-      industry: params.industry || profile.industry,
-      imageMode: "img2img",
-      variationKey: params.variationKey || jobId,
-    });
-    finalNegative = buildMasterNegativePrompt({
-      clientProfile: profile,
-      industry: params.industry || profile.industry,
-      imageMode: "img2img",
-    });
-  }
-  if (!finalPrompt) throw new Error("prompt required");
+  const profile = params.clientProfile && typeof params.clientProfile === "object"
+    ? params.clientProfile
+    : { industry: params.industry || "general" };
+  const userPrompt = (prompt && String(prompt).trim()) || "Professional product in scene";
+  const finalPrompt = buildMasterImagePrompt({
+    clientProfile: profile,
+    userPrompt,
+    campaignPrompt: userPrompt,
+    industry: params.industry || profile.industry,
+    imageMode: "img2img",
+    variationKey: params.variationKey || jobId,
+  });
+  const finalNegative = buildMasterNegativePrompt({
+    clientProfile: profile,
+    industry: params.industry || profile.industry,
+    imageMode: "img2img",
+  });
 
   const enhancedPrompt = `${finalPrompt}, professional, family friendly`;
   const enhancedNegativePrompt = finalNegative
@@ -300,12 +292,17 @@ async function generateFromImage(params) {
   const filePath = path.join(outputsDir, `${jobId}.png`);
   fs.writeFileSync(filePath, resizedBuffer);
 
-  return {
+  const result = {
     publicUrl: `/outputs/product-ads/${jobId}.png`,
     width: targetWidth,
     height: targetHeight,
     resolution: resolution || undefined,
   };
+  if (params.debug) {
+    const { industryUsed, heroLockUsed } = getLastBuildDebug();
+    result._debug = { industryUsed, heroLockUsed, prompt: finalPrompt, negativePrompt: finalNegative };
+  }
+  return result;
 }
 
 module.exports = {

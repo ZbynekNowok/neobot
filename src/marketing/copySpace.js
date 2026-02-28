@@ -16,6 +16,14 @@ const REGION_BY_PLACEMENT = {
   right_panel: { xPct: 0.52, yPct: 0.1, wPct: 0.43, hPct: 0.8 },
 };
 
+/** Multi-zone regions for AI layout (headline / subheadline / CTA can go in different zones). */
+const ZONE_REGIONS = {
+  top_band: { xPct: 0.07, yPct: 0.05, wPct: 0.86, hPct: 0.28, align: "left" },
+  bottom_band: { xPct: 0.07, yPct: 0.62, wPct: 0.86, hPct: 0.33, align: "left" },
+  right_panel: { xPct: 0.52, yPct: 0.1, wPct: 0.43, hPct: 0.8, align: "left" },
+  center: { xPct: 0.25, yPct: 0.35, wPct: 0.5, hPct: 0.3, align: "center" },
+};
+
 const CENTER_THRESHOLD = 0.85; // center allowed only if score(center) <= bestEdgeScore * this
 
 /**
@@ -117,8 +125,30 @@ async function pickBestPlacementFromImageForCompose(imagePath, textLayout) {
   return placement;
 }
 
+/**
+ * Get clutter score for each AI layout zone (lower = cleaner).
+ * Used when textLayout === "auto" to assign headline / subheadline / CTA to different zones.
+ * @param {string} imagePath - Absolute or relative path to the background image
+ * @returns {Promise<{ scores: Record<string, number>, centerAllowed: boolean }>}
+ */
+async function getZoneClutterScores(imagePath) {
+  const { gray, width, height } = await loadGrayscaleBuffer(imagePath);
+  const scores = {};
+  for (const [zone, r] of Object.entries(ZONE_REGIONS)) {
+    scores[zone] = regionClutterScore(gray, width, height, r.xPct, r.yPct, r.wPct, r.hPct);
+  }
+  const edgeZones = ["top_band", "bottom_band", "right_panel"];
+  const edgeScores = edgeZones.map((z) => scores[z]).filter((s) => s != null);
+  const bestEdgeScore = edgeScores.length > 0 ? Math.min(...edgeScores) : Infinity;
+  const centerScore = scores.center != null ? scores.center : Infinity;
+  const centerAllowed = centerScore <= bestEdgeScore * CENTER_THRESHOLD;
+  return { scores, centerAllowed };
+}
+
 module.exports = {
   pickBestPlacementFromImage,
   pickBestPlacementFromImageForCompose,
+  getZoneClutterScores,
   REGION_BY_PLACEMENT,
+  ZONE_REGIONS,
 };

@@ -2,48 +2,26 @@
 
 /**
  * Global Master Image Prompt Engine – base constants applied to ALL image generation.
- * Ensures marketing creative quality, anti-repetition, and no catalog/grid look.
+ * Ensures: commercial quality, single scene, no collage/grid/screenshot, NO TEXT in image.
  */
 
-const GLOBAL_MARKETING_BASE = [
-  "high-end commercial marketing photography",
-  "cinematic lighting",
-  "premium advertising look",
-  "professional art direction",
-  "rich environment with depth",
-  "visual storytelling",
-  "unique composition",
-  "one clear hero subject",
-  "varied scene props relevant to industry",
-  "no repetition",
-  "NEVER: boring catalog, product-on-plain-wall, grid or rows of identical items, repetitive duplicates, symmetrical duplication artifacts",
-  "NEVER: text, letters, logos, watermark in the image",
+const GLOBAL_POSITIVE_BASE = [
+  "commercial advertising photo, high-end, sharp, crisp, professional lighting",
+  "single scene, one hero subject, no collage, no grid, no tiled layout",
+  "NO TEXT, NO LOGOS, NO WATERMARKS, NO UI, NO WEBSITE SCREENSHOT",
+  "leave clean copy-space areas (top/bottom/side), low clutter",
 ].join(", ");
 
 const GLOBAL_NEGATIVE_BASE = [
-  "text",
-  "letters",
-  "words",
-  "typography",
-  "watermark",
-  "logo",
-  "brand name",
-  "duplicated objects",
-  "clone artifacts",
-  "repeating pattern",
-  "grid layout",
-  "rows of identical items",
-  "catalog shot",
-  "plain white wall",
-  "boring",
-  "nsfw",
-  "nude",
-  "explicit",
+  "text, letters, typography, watermark, logo, caption",
+  "collage, grid, tiled layout, lineup, catalog sheet, product sheet, multiple products, repeated objects",
+  "website screenshot, webpage, UI, interface, browser, menu, header, footer, paragraph text, lorem ipsum",
+  "blurry, soft focus, motion blur, low detail, out of focus",
 ].join(", ");
 
 const CREATIVE_VARIATION_SEEDS = [
   "editorial lifestyle scene, dynamic angle, shallow depth of field",
-  "studio editorial, soft key light, premium fashion look",
+  "studio editorial, soft key light, premium look",
   "street lifestyle, natural light, urban context",
   "boutique interior, warm ambient, curated props",
   "outdoor spring city, golden hour, aspirational mood",
@@ -53,7 +31,7 @@ const CREATIVE_VARIATION_SEEDS = [
 ];
 
 module.exports = {
-  GLOBAL_MARKETING_BASE,
+  GLOBAL_POSITIVE_BASE,
   GLOBAL_NEGATIVE_BASE,
   CREATIVE_VARIATION_SEEDS,
 };

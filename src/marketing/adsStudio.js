@@ -6,6 +6,7 @@ const cheerio = require("cheerio");
 const { llmChat } = require("../llm/llmGateway.js");
 const { generateBackground, generateFromImage, buildNegativePrompt } = require("../imageProviders/replicate.js");
 const { detectIndustry } = require("./imageCompose.js");
+const { getClientProfile } = require("./clientProfile.js");
 
 const FETCH_TIMEOUT_MS = 15000;
 const MAX_PROMPT_CHARS = 12000;
@@ -344,6 +345,7 @@ async function generateImagesFromUrl(url, options = {}) {
   const format = ["square", "story", "both"].includes(options.format) ? options.format : "square";
   const requestId = options.requestId || `ads-img-${Date.now()}`;
   const resolution = normalizeResolution(options.resolution);
+  const debug = Boolean(options.debug);
 
   const brand = await getBrandContextFromUrl(url, requestId);
 
@@ -376,8 +378,14 @@ Přesně ${count} položek v items.`;
     throw new Error("Neplatný JSON pro image prompts");
   }
 
-  const industry = detectIndustry(brand.description || brand.name || "");
-  const clientProfile = { industry, brandName: brand.name || null };
+  const fallbackIndustry = detectIndustry(brand.description || brand.name || "");
+  const clientProfile = (options.clientProfile && typeof options.clientProfile === "object")
+    ? getClientProfile(
+        { ...options.clientProfile, style: options.clientProfile.style || options.clientProfile.brandStyle },
+        fallbackIndustry
+      )
+    : { industry: fallbackIndustry, brandName: brand.name || null };
+  const industry = clientProfile.industry;
   const formatsToGenerate = []; // { format: "square"|"story", index }
   if (format === "both") {
     const half = Math.floor(count / 2);
@@ -417,6 +425,7 @@ Přesně ${count} položek v items.`;
             outputHeight,
             jobId: attempt === 0 ? jobId : `${jobId}-retry${attempt}`,
             resolution,
+            debug: i === 0 ? debug : false,
           }),
           new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), IMAGE_GENERATION_TIMEOUT_MS)),
         ]);
@@ -447,10 +456,15 @@ Přesně ${count} položek v items.`;
       width: result.width,
       height: result.height,
       resolution: result.resolution || resolution,
+      _debug: result._debug,
     });
   }
 
-  return { images };
+  const out = { images: images.map(({ _debug, ...img }) => img) };
+  if (debug && images.length > 0 && images[0]._debug) {
+    out._debug = images[0]._debug;
+  }
+  return out;
 }
 
 const PRODUCT_VARIANTS_MIN = 4;
@@ -470,6 +484,7 @@ async function generateProductVariants(options) {
   const style = ["modern", "luxury", "minimal", "industrial"].includes(options.style) ? options.style : "modern";
   const requestId = options.requestId || `ads-product-${Date.now()}`;
   const resolution = normalizeResolution(options.resolution);
+  const debug = Boolean(options.debug);
 
   const stylePrompt = {
     modern: "modern, clean, contemporary",
@@ -510,8 +525,14 @@ Přesně ${variants} položek v items.`;
     throw new Error("Neplatný JSON pro product scenes");
   }
 
-  const industry = detectIndustry(productName || productContext || "");
-  const clientProfile = { industry, brandName: null };
+  const fallbackIndustry = detectIndustry(productName || productContext || "");
+  const clientProfile = (options.clientProfile && typeof options.clientProfile === "object")
+    ? getClientProfile(
+        { ...options.clientProfile, style: options.clientProfile.style || options.clientProfile.brandStyle },
+        fallbackIndustry
+      )
+    : { industry: fallbackIndustry, brandName: null };
+  const industry = clientProfile.industry;
   const formatsToGenerate = [];
   if (format === "both") {
     const half = Math.floor(variants / 2);
@@ -553,6 +574,7 @@ Přesně ${variants} položek v items.`;
             jobId: attemptJobId,
             promptStrength: 0.7,
             resolution,
+            debug: i === 0 ? debug : false,
           }),
           new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), IMAGE_GENERATION_TIMEOUT_MS)),
         ]);
@@ -582,10 +604,15 @@ Přesně ${variants} položek v items.`;
       width: result.width,
       height: result.height,
       resolution: result.resolution || resolution,
+      _debug: result._debug,
     });
   }
 
-  return { images };
+  const out = { images: images.map(({ _debug, ...img }) => img) };
+  if (debug && images.length > 0 && images[0]._debug) {
+    out._debug = images[0]._debug;
+  }
+  return out;
 }
 
 module.exports = {

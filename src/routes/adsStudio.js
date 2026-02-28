@@ -117,10 +117,13 @@ adsStudioRouter.post("/ads/images", async (req, res) => {
   const format = ["square", "story", "both"].includes(req.body?.format) ? req.body.format : "square";
   const resolution = normalizeResolution(req.body?.resolution);
   const requestId = req.id || `ads-img-${Date.now()}`;
+  const clientProfile = req.body?.clientProfile && typeof req.body.clientProfile === "object" ? req.body.clientProfile : undefined;
+  const isDev = process.env.NODE_ENV !== "production";
+  const debug = req.query?.debug === "1" && isDev;
 
   try {
-    const { images } = await generateImagesFromUrl(url.trim(), { count, format, requestId, resolution });
-    return res.json({
+    const { images, _debug } = await generateImagesFromUrl(url.trim(), { count, format, requestId, resolution, clientProfile, debug });
+    const json = {
       ok: true,
       images: images.map((img) => ({
         url: img.url,
@@ -131,7 +134,9 @@ adsStudioRouter.post("/ads/images", async (req, res) => {
         height: img.height,
         resolution: img.resolution,
       })),
-    });
+    };
+    if (_debug) json._debug = _debug;
+    return res.json(json);
   } catch (err) {
     const isFetchError =
       err.code === "FETCH_FAILED" ||
@@ -225,6 +230,12 @@ adsStudioRouter.post("/ads/product-variants", (req, res) => {
     const productName = typeof req.body?.productName === "string" ? req.body.productName.trim() : "";
     const resolution = normalizeResolution(req.body?.resolution);
     const requestId = req.id || `ads-product-${Date.now()}`;
+    let clientProfile = req.body?.clientProfile && typeof req.body.clientProfile === "object" ? req.body.clientProfile : undefined;
+    if (req.body?.clientProfile && typeof req.body.clientProfile === "string") {
+      try {
+        clientProfile = JSON.parse(req.body.clientProfile);
+      } catch (_) {}
+    }
 
     const proto = req.get("x-forwarded-proto") || req.protocol || "https";
     const host = req.get("x-forwarded-host") || req.get("host") || "api.neobot.cz";
@@ -256,8 +267,11 @@ adsStudioRouter.post("/ads/product-variants", (req, res) => {
       });
     }
 
+    const isDev = process.env.NODE_ENV !== "production";
+    const debug = req.query?.debug === "1" && isDev;
+
     try {
-      const { images } = await generateProductVariants({
+      const { images, _debug } = await generateProductVariants({
         publicImageUrl,
         variants,
         format,
@@ -265,6 +279,8 @@ adsStudioRouter.post("/ads/product-variants", (req, res) => {
         style,
         requestId,
         resolution,
+        clientProfile,
+        debug,
       });
 
       setTimeout(() => {
@@ -273,7 +289,7 @@ adsStudioRouter.post("/ads/product-variants", (req, res) => {
         } catch (_) {}
       }, UPLOAD_CLEANUP_DELAY_MS);
 
-      return res.json({
+      const json = {
         ok: true,
         images: images.map((img) => ({
           url: img.url,
@@ -284,7 +300,9 @@ adsStudioRouter.post("/ads/product-variants", (req, res) => {
           height: img.height,
           resolution: img.resolution,
         })),
-      });
+      };
+      if (_debug) json._debug = _debug;
+      return res.json(json);
     } catch (err) {
       try {
         fs.unlinkSync(req.file.path);

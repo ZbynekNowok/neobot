@@ -6,6 +6,18 @@
  */
 
 const INDUSTRY_PROMPTS = {
+  automotive: {
+    environments: "car detailing studio, garage, showroom, automotive workshop",
+    lighting: "dramatic reflections on paint, professional detailing lighting, sharp reflections",
+    heroSubjects: "car as dominant subject, detailing action, polishing, ceramic coating, paint care",
+    prohibited: "portrait only, people without car, bar, office, unrelated lifestyle, fashion, restaurant",
+  },
+  detailing: {
+    environments: "car detailing studio, garage, showroom, automotive workshop",
+    lighting: "dramatic reflections on paint, professional detailing lighting, sharp reflections",
+    heroSubjects: "car as dominant subject, detailing action, polishing, ceramic coating, paint care",
+    prohibited: "portrait only, people without car, bar, office, unrelated lifestyle, fashion, restaurant",
+  },
   fashion: {
     environments: "fashion studio, boutique, editorial set, urban street style, runway backdrop",
     lighting: "soft editorial lighting, fashion photography lighting, premium look",
@@ -46,7 +58,7 @@ const INDUSTRY_PROMPTS = {
     environments: "professional studio, clean marketing set, versatile commercial backdrop",
     lighting: "professional commercial lighting, clean and premium",
     heroSubjects: "hero product or subject, clear focal point",
-    prohibited: "cluttered, busy unrelated elements",
+    prohibited: "cluttered, busy unrelated elements, many cars, car lineup, dealership catalog",
   },
 };
 
