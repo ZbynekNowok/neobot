@@ -99,6 +99,9 @@ async function generateImage({ contextPack, task, params, debug = false }) {
   }
   markContextUsage(contextPack);
 
+  if (!contextPack.constraints?.negativePrompt && contextPack.constraints && typeof contextPack.constraints === "object") {
+    console.warn("ContextPack missing negativePrompt in constraints");
+  }
   const options = {
     ...params,
     prompt: contextPack.brief || params.prompt || "professional marketing visual",
@@ -109,6 +112,7 @@ async function generateImage({ contextPack, task, params, debug = false }) {
     industry: contextPack.resolvedIndustry,
     debug: debug || params.debug,
     _traceId: contextPack.traceId,
+    negativePrompt: contextPack.constraints?.negativePrompt,
   };
 
   try {

@@ -205,11 +205,12 @@ function getBackgroundPromptParams(opts) {
  */
 function buildBackgroundPrompt(opts) {
   const params = getBackgroundPromptParams(opts);
-  return buildMasterImagePrompt({
+  const built = buildMasterImagePrompt({
     ...params,
     imageMode: "background",
     variationKey: `compose-bg-${Date.now()}`,
   });
+  return typeof built === "object" && built && built.prompt != null ? built.prompt : built;
 }
 
 /**
@@ -647,14 +648,25 @@ async function composeImageWithText(options, requestId) {
     stylePreset: options.stylePreset || "auto",
   });
 
+  const { prompt: masterPrompt, negativePrompt: masterNegative } = buildMasterImagePrompt({
+    ...bgParams,
+    imageMode: "background",
+    variationKey: `compose-bg-${requestId || Date.now()}`,
+  });
+
   if (DEBUG_COMPOSE) {
     console.log("[compose] industry:", effectiveIndustry, "topic:", topic, "textLayout:", textLayout, "textPlacement:", requestedPlacement);
   }
 
   const bgJobId = `compose-bg-${requestId || Date.now()}`;
   const traceIdForReplicate = options._traceId || requestId;
+  const finalNegative = options.negativePrompt && String(options.negativePrompt).trim()
+    ? `${masterNegative}, ${String(options.negativePrompt).trim()}`
+    : masterNegative;
   const bgResult = await generateBackground({
     ...bgParams,
+    prompt: masterPrompt,
+    negativePrompt: finalNegative,
     imageMode: "background",
     variationKey: `compose-bg-${requestId || Date.now()}`,
     width: dims.generateWidth,
@@ -674,7 +686,7 @@ async function composeImageWithText(options, requestId) {
   );
 
   if (options.backgroundOnly) {
-    return {
+    const out = {
       background: {
         url: backgroundUrl,
         width: bgResult.width || dims.outputWidth,
@@ -682,6 +694,10 @@ async function composeImageWithText(options, requestId) {
         resolution,
       },
     };
+    if (options.debug && bgResult._debug) {
+      out._debug = bgResult._debug;
+    }
+    return out;
   }
 
   let effectivePlacement = requestedPlacement;

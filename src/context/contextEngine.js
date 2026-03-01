@@ -2,6 +2,7 @@
 
 const crypto = require("crypto");
 const { getClientProfile } = require("../marketing/clientProfile.js");
+const { GLOBAL_NEGATIVE_BASE } = require("../config/masterPrompt.js");
 
 /** Force rules: brief regex → industry. Applied before profile industry. */
 const INDUSTRY_FORCE_RULES = [
@@ -94,13 +95,24 @@ async function buildContextPack({ body = {}, user, workspace, routeName = "" }) 
   const language = (body.language && String(body.language).trim()) || "cs";
   const outputType = (body.outputType || body.taskType || routeName) || "content";
 
-  const constraints = body.constraints && typeof body.constraints === "object"
+  const existingConstraints = body.constraints && typeof body.constraints === "object"
     ? {
         mustInclude: Array.isArray(body.constraints.mustInclude) ? body.constraints.mustInclude : [],
         forbidden: Array.isArray(body.constraints.forbidden) ? body.constraints.forbidden : [],
         hardRules: Array.isArray(body.constraints.hardRules) ? body.constraints.hardRules : [],
       }
     : { mustInclude: [], forbidden: [], hardRules: [] };
+
+  const constraints = {
+    ...existingConstraints,
+    negativePrompt: [
+      GLOBAL_NEGATIVE_BASE,
+      body.negativePrompt && String(body.negativePrompt).trim() ? String(body.negativePrompt).trim() : null,
+      clientProfile && typeof clientProfile.negativePrompt === "string" && clientProfile.negativePrompt.trim() ? clientProfile.negativePrompt.trim() : null,
+    ]
+      .filter(Boolean)
+      .join(", "),
+  };
 
   const audience = body.audience ?? clientProfile?.targetAudience ?? (workspace && workspace.target_audience) ?? null;
   const offerSummary = body.offerSummary ?? body.product_description ?? body.offer ?? null;

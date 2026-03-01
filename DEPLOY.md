@@ -40,6 +40,9 @@ Expected: `HTTP/1.1 204 No Content` with headers:
 
 ### 2. Nginx Configuration (port 8080)
 - Backend runs on **port 8080** (PM2 `ecosystem.config.js` sets `PORT: "8080"`). Nginx must proxy to the same port.
+- **Quick fix (proxy was 3000):**  
+  `bash scripts/fix-nginx-port.sh`  
+  Finds the server block with `server_name api.neobot.cz`, replaces `127.0.0.1:3000` with `127.0.0.1:8080`, runs `nginx -t` and `systemctl reload nginx`.
 - **Option A – use repo config:**  
   `sudo cp nginx-api.neobot.cz.conf /etc/nginx/sites-available/api.neobot.cz`  
   `sudo ln -sf /etc/nginx/sites-available/api.neobot.cz /etc/nginx/sites-enabled/`
@@ -47,7 +50,7 @@ Expected: `HTTP/1.1 204 No Content` with headers:
   `proxy_pass http://127.0.0.1:8080;`
 - Test: `sudo nginx -t`
 - Reload: `sudo systemctl reload nginx`
-- Verify: `curl -s http://127.0.0.1/api/status` (via nginx) → `{"status":"OK","service":"NeoBot",...}`
+- Verify: `curl -s http://127.0.0.1:8080/api/status` then `curl -sk https://api.neobot.cz/api/status` (JSON with `"status"`).
 
 ### 3. Frontend (Lovable / Vite)
 - Frontend files in `public/` are served by Lovable

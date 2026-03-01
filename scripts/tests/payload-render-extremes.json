@@ -1,0 +1,45 @@
+{
+  "backgroundUrl": "BACKGROUND_URL_PLACEHOLDER",
+  "format": "square",
+  "resolution": "standard",
+  "layers": [
+    { "type": "gradient", "direction": "bottom", "strength": 0.4 },
+    {
+      "type": "text",
+      "id": "headline",
+      "text": "Test headline",
+      "x": 76,
+      "y": 172,
+      "fontSize": 10,
+      "fontWeight": 800,
+      "color": "#ffffff",
+      "align": "left",
+      "maxWidthPct": 0.8
+    },
+    {
+      "type": "text",
+      "id": "subheadline",
+      "text": "Subheadline text",
+      "x": 76,
+      "y": 230,
+      "fontSize": 90,
+      "fontWeight": 400,
+      "color": "#ffffff",
+      "align": "left",
+      "maxWidthPct": 0.8
+    },
+    {
+      "type": "button",
+      "id": "cta",
+      "text": "CTA",
+      "x": 76,
+      "y": 538,
+      "width": 600,
+      "height": 115,
+      "fontSize": 60,
+      "backgroundColor": "#2563eb",
+      "textColor": "#ffffff",
+      "borderRadius": 999
+    }
+  ]
+}

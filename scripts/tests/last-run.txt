@@ -1,0 +1,22 @@
+=== Part A: Server / Nginx / Port ===
+[PASS] Backend listening on 8080
+[PASS] /api/status local
+[PASS] /api/status public
+--- Nginx server block api.neobot.cz ---
+(nginx -T or sudo not available)
+---
+=== Part B: Render debug ===
+[PASS] render debug fields
+[PASS] CTA normalized keys
+=== Part C: Context engine ===
+[PASS] Context automotive
+[PASS] Prompt contains automotive keywords
+[PASS] Anti-collage in negative prompt
+[PASS] contextUsed.style.preset present
+=== Part D: Replicate policy debug ===
+[INFO] suspectedCollage false
+=== Part E: Frontend static ===
+[PASS] FE hooks present
+
+=== Summary ===
+PASS: 10  FAIL: 0  SKIP: 0

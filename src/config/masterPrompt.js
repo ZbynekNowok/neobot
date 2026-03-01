@@ -15,7 +15,7 @@ const GLOBAL_POSITIVE_BASE = [
 
 const GLOBAL_NEGATIVE_BASE = [
   "text, letters, typography, watermark, logo, caption",
-  "collage, montage, split screen, diptych, triptych, two panels, double image, grid, tiled, side by side, before and after, comic panel, multiple frames",
+  "collage, montage, split screen, diptych, triptych, two panels, multiple panels, double image, multiple frames, tiled image, grid layout, grid, tiled, side by side, before and after, comic panel",
   "collage, grid, tiled layout, lineup, catalog sheet, product sheet, multiple products, repeated objects",
   "website screenshot, webpage, UI, interface, browser, menu, header, footer, paragraph text, lorem ipsum",
   "blurry, soft focus, motion blur, low detail, out of focus",

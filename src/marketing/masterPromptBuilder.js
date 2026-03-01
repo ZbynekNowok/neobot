@@ -155,13 +155,21 @@ function buildMasterImagePrompt(opts) {
     parts.push("Preserve product identity. No text, no logo in the image.");
   }
 
-  const finalPrompt = parts.join(". ");
+  const prompt = parts.join(". ");
+
+  const negativePrompt = [
+    GLOBAL_NEGATIVE_BASE,
+    heroLock.forbidden,
+    ind.prohibited,
+  ]
+    .filter(Boolean)
+    .join(", ");
 
   if (DEBUG_MASTER) {
     console.log("[masterPrompt] industry:", industry, "heroLock:", heroLockKey, "imageMode:", imageMode, "variationKey:", variationKey);
   }
 
-  return finalPrompt;
+  return { prompt, negativePrompt };
 }
 
 /**

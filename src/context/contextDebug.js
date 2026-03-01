@@ -25,14 +25,20 @@ function buildDebugOutput(contextPack, extra = {}) {
       sources: contextPack.sources,
       traceId: contextPack.traceId,
       style: contextPack.style && typeof contextPack.style === "object" ? { preset: contextPack.style.preset } : undefined,
+      constraints:
+        contextPack.constraints && typeof contextPack.constraints === "object"
+          ? { negativePrompt: truncate(contextPack.constraints.negativePrompt, 500) }
+          : undefined,
     },
   };
   if (extra.finalSystemPrompt != null) out.finalSystemPrompt = truncate(extra.finalSystemPrompt, 400);
   if (extra.finalUserPrompt != null) out.finalUserPrompt = truncate(extra.finalUserPrompt, 400);
   if (extra.providerPrompt != null) out.providerPrompt = truncate(extra.providerPrompt, 400);
-  if (extra.negativePrompt != null) out.negativePrompt = truncate(extra.negativePrompt, 300);
+  if (extra.negativePrompt != null) out.negativePrompt = truncate(extra.negativePrompt, 500);
   if (extra.industryUsed != null) out.industryUsed = extra.industryUsed;
   if (extra.heroLockUsed != null) out.heroLockUsed = extra.heroLockUsed;
+  if (extra.multipleOutputsReturned != null) out.multipleOutputsReturned = extra.multipleOutputsReturned;
+  if (extra.suspectedCollage != null) out.suspectedCollage = extra.suspectedCollage;
   return out;
 }
 
