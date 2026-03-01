@@ -152,6 +152,7 @@ async function generateBackground(params) {
     throw new Error(`Replicate generation failed: ${msg}`);
   }
   if (!output || !Array.isArray(output) || output.length === 0) throw new Error("Replicate returned no output");
+  // Never stitch multiple outputs into one image. Always use first output only for background.
   const imageUrl = output[0];
 
   let imageBuffer;
@@ -165,6 +166,19 @@ async function generateBackground(params) {
 
   const targetWidth = outputWidth || generateWidth;
   const targetHeight = outputHeight || generateHeight;
+
+  let suspectedCollage = false;
+  try {
+    const meta = await sharp(imageBuffer).metadata();
+    const w = meta.width || 0;
+    const h = meta.height || 0;
+    if (h >= 1.8 * targetHeight || w >= 1.8 * targetWidth) {
+      suspectedCollage = true;
+    }
+  } catch {
+    // ignore metadata errors
+  }
+
   const resizedBuffer = await sharp(imageBuffer)
     .resize(targetWidth, targetHeight, { fit: "cover", position: "center" })
     .png()
@@ -186,6 +200,13 @@ async function generateBackground(params) {
   if (params.debug) {
     const { industryUsed, heroLockUsed } = getLastBuildDebug();
     result._debug = { industryUsed, heroLockUsed, prompt, negativePrompt };
+    if (output.length > 1) {
+      result._debug.multipleOutputsReturned = output.length;
+      result._debug.note = "Using first output only; never stitching multiple into one image.";
+    }
+    if (suspectedCollage) {
+      result._debug.suspectedCollage = true;
+    }
   }
   return result;
 }

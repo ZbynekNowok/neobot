@@ -475,7 +475,18 @@ imagesRouter.post("/images/compose/render", async (req, res) => {
       resolution: result.resolution,
     };
     if (req.query?.debug === "1") {
-      json._debug = { layersUsed: safeLayers };
+      json._debug = {
+        canvas: {
+          width: dims.outputWidth,
+          height: dims.outputHeight,
+          format,
+          resolution,
+        },
+        layersNormalized: safeLayers,
+        layerKeysSummary: safeLayers.map((layer) =>
+          Object.keys(layer).filter((k) => typeof layer[k] !== "undefined")
+        ),
+      };
     }
     return res.json(json);
   } catch (err) {

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useTaskOutputSaver } from "@/hooks/useTaskOutputSaver";
+import { useThrottledCallback } from "@/hooks/useThrottledCallback";
 import TaskContextBanner from "@/components/app/TaskContextBanner";
 import { NEOBOT_API_BASE, NEOBOT_API_KEY, saveOutputToHistory, neobotFetch } from "@/lib/neobot";
 import {
@@ -222,6 +223,9 @@ function ComposeEditor({
   fillContainer,
   containerRef: containerRefProp,
   aspectRatio,
+  onDragStart,
+  onDragEnd,
+  onDragMove,
 }: {
   composeState: ComposeState;
   draftTexts: { headline: string; subheadline: string; bullets: string[]; cta: string };
@@ -234,6 +238,9 @@ function ComposeEditor({
   fillContainer?: boolean;
   containerRef?: React.RefObject<HTMLDivElement | null>;
   aspectRatio?: number;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
+  onDragMove?: () => void;
 }) {
   const internalRef = useRef<HTMLDivElement>(null);
   const containerRef = containerRefProp ?? internalRef;
@@ -277,11 +284,15 @@ function ComposeEditor({
         const next = { ...prev[dragging.id], xPct, yPct };
         return { ...prev, [dragging.id]: next };
       });
+      onDragMove?.();
     },
-    [dragging, setLayout]
+    [dragging, setLayout, onDragMove]
   );
 
-  const handlePointerUp = useCallback(() => setDragging(null), []);
+  const handlePointerUp = useCallback(() => {
+    setDragging(null);
+    onDragEnd?.();
+  }, [onDragEnd]);
 
   useEffect(() => {
     if (!dragging) return;
@@ -347,6 +358,7 @@ function ComposeEditor({
                   (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
                   onSelectLayer(key);
                   setDragging({ id: key, startX: e.clientX, startY: e.clientY, startXPct: item.xPct, startYPct: item.yPct });
+                  onDragStart?.();
                 }
               }}
             >
@@ -375,6 +387,7 @@ function ComposeEditor({
                 (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
                 onSelectLayer(key);
                 setDragging({ id: key, startX: e.clientX, startY: e.clientY, startXPct: item.xPct, startYPct: item.yPct });
+                onDragStart?.();
               }
             }}
           >
@@ -437,6 +450,12 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
   const initialLayoutRef = useRef<Record<TextLayoutKey, TextLayoutItem> | null>(null);
   const previewContainerRef = useRef<HTMLDivElement>(null);
   const [backgroundImage, setBackgroundImage] = useState<HTMLImageElement | null>(null);
+  const renderAbortRef = useRef<AbortController | null>(null);
+  const renderSeqRef = useRef(0);
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
+  const [isDragging, setIsDragging] = useState(false);
+  const [liveRenderError, setLiveRenderError] = useState<string | null>(null);
   const { taskContext, saveOutputToTask, isSavingToTask, savedToTask, navigateBackToTask } = useTaskOutputSaver();
 
   const isDebug = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "1";
@@ -801,18 +820,15 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
     setSelectedLayer(null);
   };
 
-  const handleUpdateLayout = async () => {
-    const meta = lastComposeMeta || composeState;
-    if (!meta?.backgroundUrl) return;
-    setErrorRender(null);
-    setLoadingRender(true);
-    try {
+  /** Build layers payload (px) from current layout + draftTexts for a given meta. */
+  const buildLayersPayload = useCallback(
+    (meta: { backgroundUrl: string; format: string; resolution: string }, currentLayout: Record<TextLayoutKey, TextLayoutItem>) => {
       const { width: cw, height: ch } = getCanvasDimensions(meta.format, meta.resolution);
-      const h = layout.headline;
-      const s = layout.subheadline;
-      const c = layout.cta;
+      const h = currentLayout.headline;
+      const s = currentLayout.subheadline;
+      const c = currentLayout.cta;
       const ctaLayout = isCtaLayout(c) ? c : { ...DEFAULT_LAYOUT.cta } as CtaLayoutItem;
-      const layersPayload = [
+      return [
         { type: "gradient", direction: "bottom", strength: 0.4 },
         {
           type: "text",
@@ -854,10 +870,65 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
           borderRadius: typeof ctaLayout.borderRadius === "number" ? ctaLayout.borderRadius : 999,
         },
       ];
+    },
+    [draftTexts]
+  );
+
+  const runLiveRender = useCallback(() => {
+    const meta = lastComposeMeta || composeState;
+    if (!meta?.backgroundUrl || !Array.isArray(meta?.layers)) return;
+    if (renderAbortRef.current) {
+      renderAbortRef.current.abort();
+    }
+    const ac = new AbortController();
+    renderAbortRef.current = ac;
+    const seq = ++renderSeqRef.current;
+    const layersPayload = buildLayersPayload(meta, layoutRef.current);
+    const url = meta.backgroundUrl.startsWith("http") ? meta.backgroundUrl : `${NEOBOT_API_BASE}${meta.backgroundUrl}`;
+    setLiveRenderError(null);
+    neobotFetch("/api/images/compose/render", {
+      method: "POST",
+      body: JSON.stringify({
+        backgroundUrl: url,
+        format: meta.format,
+        resolution: meta.resolution,
+        layers: layersPayload,
+      }),
+      signal: ac.signal,
+    })
+      .then((data: any) => {
+        if (ac.signal.aborted || seq !== renderSeqRef.current) return;
+        const compositeUrl = data?.composite?.url
+          ? (String(data.composite.url).startsWith("http") ? data.composite.url : `${NEOBOT_API_BASE}${data.composite.url}`)
+          : "";
+        if (compositeUrl && imageOutput) {
+          setImageOutput((prev) => (prev ? { ...prev, imageUrl: compositeUrl } : prev));
+        }
+        if (Array.isArray(data?.layers) && composeState) {
+          setComposeState((prev) => (prev ? { ...prev, layers: data.layers } : null));
+        }
+      })
+      .catch((e: any) => {
+        if (e?.name === "AbortError" || ac.signal.aborted) return;
+        if (seq !== renderSeqRef.current) return;
+        setLiveRenderError(e?.message || "Render selhal");
+      });
+  }, [composeState, lastComposeMeta, buildLayersPayload, imageOutput]);
+
+  const throttledRunLiveRender = useThrottledCallback(runLiveRender, 120);
+
+  const handleUpdateLayout = async () => {
+    const meta = lastComposeMeta || composeState;
+    if (!meta?.backgroundUrl) return;
+    setErrorRender(null);
+    setLiveRenderError(null);
+    setLoadingRender(true);
+    try {
+      const layersPayload = buildLayersPayload(meta, layout);
       const data = await neobotFetch("/api/images/compose/render", {
         method: "POST",
         body: JSON.stringify({
-          backgroundUrl: meta.backgroundUrl,
+          backgroundUrl: meta.backgroundUrl.startsWith("http") ? meta.backgroundUrl : `${NEOBOT_API_BASE}${meta.backgroundUrl}`,
           format: meta.format,
           resolution: meta.resolution,
           layers: layersPayload,
@@ -1329,10 +1400,14 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
                 className="relative rounded-2xl border border-white/10 bg-white/5 h-[calc(100vh-260px)] min-h-[520px] overflow-hidden flex items-center justify-center"
               >
                 {composeState.backgroundUrl ? (
+                  <>
                   <ComposeEditor
                     composeState={composeState}
                     draftTexts={draftTexts}
-                    backgroundImageUrl={composeState.backgroundUrl.startsWith("http") ? composeState.backgroundUrl : `${NEOBOT_API_BASE}${composeState.backgroundUrl}`}
+                    backgroundImageUrl={
+                      (imageOutput?.imageUrl && imageOutput.imageUrl.startsWith("http") ? imageOutput.imageUrl : imageOutput?.imageUrl ? `${NEOBOT_API_BASE}${imageOutput.imageUrl}` : null)
+                      || (composeState.backgroundUrl.startsWith("http") ? composeState.backgroundUrl : `${NEOBOT_API_BASE}${composeState.backgroundUrl}`)
+                    }
                     layout={layout}
                     setLayout={setLayout}
                     selectedLayer={selectedLayer}
@@ -1341,7 +1416,16 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
                     fillContainer
                     containerRef={previewContainerRef}
                     aspectRatio={getCanvasDimensions(composeState.format, composeState.resolution).width / getCanvasDimensions(composeState.format, composeState.resolution).height}
+                    onDragStart={() => { setIsDragging(true); setLiveRenderError(null); }}
+                    onDragEnd={() => setIsDragging(false)}
+                    onDragMove={throttledRunLiveRender}
                   />
+                  {liveRenderError && (
+                    <div className="absolute bottom-2 left-2 right-2 text-center text-xs text-amber-400 bg-black/60 rounded px-2 py-1">
+                      {liveRenderError}
+                    </div>
+                  )}
+                  </>
                 ) : (
                   <img
                     src={imageOutput?.imageUrl || ""}
@@ -1397,7 +1481,7 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
                       <h5 className="text-sm font-medium text-foreground">Upravit: {selectedLayer === "headline" ? "Nadpis" : selectedLayer === "subheadline" ? "Podnadpis" : "CTA"}</h5>
                       <div className="space-y-2">
                         <Label>Velikost písma</Label>
-                        <Slider value={[layout[selectedLayer].fontSize]} onValueChange={([v]) => setLayout((prev) => ({ ...prev, [selectedLayer]: { ...prev[selectedLayer], fontSize: v ?? prev[selectedLayer].fontSize } }))} min={12} max={selectedLayer === "cta" ? 48 : 72} step={2} />
+                        <Slider value={[layout[selectedLayer].fontSize]} onValueChange={([v]) => setLayout((prev) => ({ ...prev, [selectedLayer]: { ...prev[selectedLayer], fontSize: v ?? prev[selectedLayer].fontSize } }))} min={selectedLayer === "cta" ? 10 : 12} max={selectedLayer === "cta" ? 96 : 72} step={2} />
                         <span className="text-xs text-muted-foreground">{layout[selectedLayer].fontSize}px</span>
                       </div>
                       <div className="flex items-center justify-between gap-2">
