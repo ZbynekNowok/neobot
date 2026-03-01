@@ -15,6 +15,36 @@ try {
 const contentRouter = express.Router();
 
 const PLATFORMS = new Set(["facebook", "instagram"]);
+const PLATFORM_ALIASES = { fb: "facebook", ig: "instagram" };
+
+/**
+ * Vybere a normalizuje platform z requestu (backward compatible).
+ * Pořadí: body.platform → query.platform → body.meta?.platform → body.channel → body.settings?.platform.
+ * @returns {{ value: string, source: string }} normalizovaná hodnota a zdroj (pro debug)
+ */
+function getPlatform(req) {
+  const body = req.body || {};
+  const settings = body.settings && typeof body.settings === "object" ? body.settings : {};
+  const meta = body.meta && typeof body.meta === "object" ? body.meta : {};
+  const raw =
+    (typeof body.platform === "string" && body.platform.trim()) ||
+    (typeof req.query?.platform === "string" && req.query.platform.trim()) ||
+    (typeof meta.platform === "string" && meta.platform.trim()) ||
+    (typeof body.channel === "string" && body.channel.trim()) ||
+    (typeof settings.platform === "string" && settings.platform.trim()) ||
+    "";
+  const key = (raw.toLowerCase().trim() || "");
+  const normalized = PLATFORM_ALIASES[key] || key;
+  const source =
+    typeof body.platform === "string" && body.platform.trim() ? "body.platform"
+    : typeof req.query?.platform === "string" && req.query.platform.trim() ? "query.platform"
+    : typeof meta.platform === "string" && meta.platform.trim() ? "meta.platform"
+    : typeof body.channel === "string" && body.channel.trim() ? "channel"
+    : typeof settings.platform === "string" && settings.platform.trim() ? "settings.platform"
+    : "none";
+  return { value: normalized, source };
+}
+
 const TONE_LABELS = {
   formalni: "formální a profesionální",
   neformalni: "neformální a přátelský",
@@ -158,12 +188,23 @@ contentRouter.post("/content/generate", async (req, res) => {
     return res.status(400).json({ ok: false, error: "Prompt is required" });
   }
 
-  const platform = (settings.platform || "").toLowerCase().trim();
+  const debugEnabled = req.query?.debug === "1";
+  const { value: platform, source: platformSource } = getPlatform(req);
+  if (!platform) {
+    const payload = {
+      ok: false,
+      error: "Platform is required. Send platform: 'facebook' or 'instagram' in body, query (?platform=), or body.settings.platform",
+    };
+    if (debugEnabled) payload._debug = { platformSource, platformValue: null };
+    return res.status(400).json(payload);
+  }
   if (!PLATFORMS.has(platform)) {
-    return res.status(400).json({
+    const payload = {
       ok: false,
       error: "Platform must be 'facebook' or 'instagram'",
-    });
+    };
+    if (debugEnabled) payload._debug = { platformSource, platformValue: platform };
+    return res.status(400).json(payload);
   }
 
   const purpose = (settings.purpose || "prodej").toLowerCase().trim();
@@ -176,7 +217,7 @@ contentRouter.post("/content/generate", async (req, res) => {
   const platformName = platform === "instagram" ? "Instagram" : "Facebook";
 
   const profileBlock = buildProfileBlock(profile);
-  const debugEnabled = req.query?.debug === "1" || process.env.NODE_ENV !== "production";
+  const debugEnabledForLlm = debugEnabled || process.env.NODE_ENV !== "production";
 
   try {
     const contextPack = await buildContextPack({
@@ -211,7 +252,7 @@ Vrať pouze validní JSON ve tvaru: {"text":"...","hashtags":["#tag1","#tag2"],"
         purpose: "content_generate",
         extraSystem,
       },
-      debug: debugEnabled,
+      debug: debugEnabledForLlm,
     });
 
     const output_text = result.output_text;
@@ -229,6 +270,7 @@ Vrať pouze validní JSON ve tvaru: {"text":"...","hashtags":["#tag1","#tag2"],"
       notes: notes || [],
     };
     if (debugEnabled && result._debug) json._debug = result._debug;
+    if (debugEnabled) json._debug = { ...(json._debug || {}), platformSource, platformValue: platform };
     return res.json(json);
   } catch (err) {
     const code = err.code === "LLM_UNAVAILABLE" ? 503 : 500;
