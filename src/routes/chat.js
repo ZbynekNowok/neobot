@@ -7,7 +7,8 @@ const { requireRole } = require("../middleware/requireRole.js");
 const { checkAndConsumeUsage } = require("../usage/checkAndConsumeUsage.js");
 const { buildSystemPrompt } = require("../chat/buildSystemPrompt.js");
 const { generateThreadSummary } = require("../chat/threadSummary.js");
-const { llmChat } = require("../llm/llmGateway.js");
+const { buildContextPack } = require("../context/contextEngine.js");
+const { generateText } = require("../orchestrator/generate.js");
 
 const chatRouter = express.Router();
 const allRoles = ["owner", "editor", "viewer"];
@@ -212,15 +213,27 @@ chatRouter.post(
       messagesForLlm.push({ role: m.role, content: m.content });
     });
 
+    const contextPack = await buildContextPack({
+      body: { prompt: message, userPrompt: message, brief: message, outputType: "chat_marketing" },
+      user: req.user || null,
+      workspace: req.workspace || null,
+      routeName: "chat/send",
+    });
+
     let reply;
     try {
-      const result = await llmChat({
-        requestId: req.id,
-        model: "gpt-4o-mini",
-        messages: messagesForLlm,
-        temperature: 0.7,
-        maxOutputTokens: 800,
-        purpose: "chat_marketing",
+      const result = await generateText({
+        contextPack,
+        task: null,
+        params: {
+          messages: messagesForLlm,
+          requestId: req.id,
+          model: "gpt-4o-mini",
+          temperature: 0.7,
+          maxOutputTokens: 800,
+          purpose: "chat_marketing",
+        },
+        debug: req.query?.debug === "1",
       });
       reply = (result.output_text || "").trim();
     } catch (err) {
@@ -250,12 +263,9 @@ chatRouter.post(
       });
     }
 
-    res.json({
-      ok: true,
-      threadId: thread.id,
-      reply,
-      meta: { units: 2, model: "gpt-4o-mini" },
-    });
+    const json = { ok: true, threadId: thread.id, reply, meta: { units: 2, model: "gpt-4o-mini" } };
+    if (req.query?.debug === "1" && result._debug) json._debug = result._debug;
+    res.json(json);
   }
 );
 

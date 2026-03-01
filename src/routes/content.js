@@ -2,6 +2,8 @@
 
 const express = require("express");
 const crypto = require("crypto");
+const { buildContextPack } = require("../context/contextEngine.js");
+const { generateText } = require("../orchestrator/generate.js");
 
 let llmChat;
 try {
@@ -174,34 +176,45 @@ contentRouter.post("/content/generate", async (req, res) => {
   const platformName = platform === "instagram" ? "Instagram" : "Facebook";
 
   const profileBlock = buildProfileBlock(profile);
+  const debugEnabled = req.query?.debug === "1" || process.env.NODE_ENV !== "production";
 
-  const systemPrompt = `Jsi NeoBot – marketingový copywriter. Odpovídej výhradně v češtině.
-Pravidla: Piš pouze finální text příspěvku, žádné vysvětlování. Délka textu: ${lengthRange.min}–${lengthRange.max} znaků.
+  try {
+    const contextPack = await buildContextPack({
+      body: {
+        prompt,
+        userPrompt: prompt,
+        brief: prompt,
+        platform,
+        goal: purpose,
+        clientProfile: profile && Object.keys(profile).length ? { ...profile, industry: profile.industry || profile.business } : null,
+        outputType: "content_generate",
+      },
+      routeName: "content/generate",
+    });
+
+    const extraSystem = `Pravidla: Piš pouze finální text příspěvku, žádné vysvětlování. Délka textu: ${lengthRange.min}–${lengthRange.max} znaků.
 Všechny texty musí být uzpůsobeny firemnímu profilu klienta (značka, cílová skupina, tón, USP).${profileBlock}
 
 Výstup vrať jako jeden JSON objekt s klíči: "text", "hashtags" (pole řetězců, každý hashtag s #), "notes" (pole krátkých tipů, volitelné). Žádný text mimo JSON.`;
 
-  const userPrompt = `Vytvoř příspěvek pro ${platformName}.
+    const taskPrompt = `Vytvoř příspěvek pro ${platformName}.
 Účel: ${purposeDesc}. Tón: ${toneDesc}. Délka: ${lengthRange.min}–${lengthRange.max} znaků.
 
-Zadání od klienta: ${prompt}
-
 Vrať pouze validní JSON ve tvaru: {"text":"...","hashtags":["#tag1","#tag2"],"notes":["tip1","tip2"]}`;
-
-  const requestId = crypto.randomUUID();
-
-  try {
-    const { output_text } = await llmChat({
-      requestId,
-      model: process.env.CONTENT_MODEL || "gpt-4o-mini",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-      temperature: 0.7,
-      maxOutputTokens: 1500,
-      purpose: "content_generate",
+    const result = await generateText({
+      contextPack,
+      task: taskPrompt,
+      params: {
+        model: process.env.CONTENT_MODEL || "gpt-4o-mini",
+        temperature: 0.7,
+        maxOutputTokens: 1500,
+        purpose: "content_generate",
+        extraSystem,
+      },
+      debug: debugEnabled,
     });
+
+    const output_text = result.output_text;
 
     const parsed = parseGenerateResponse(output_text);
     let { text, hashtags, notes } = parsed;
@@ -209,12 +222,14 @@ Vrať pouze validní JSON ve tvaru: {"text":"...","hashtags":["#tag1","#tag2"],"
     text = stripYearsFromText(text, prompt);
     hashtags = stripYearsFromHashtags(hashtags, prompt);
 
-    return res.json({
+    const json = {
       ok: true,
       text: text || "",
       hashtags: hashtags || [],
       notes: notes || [],
-    });
+    };
+    if (debugEnabled && result._debug) json._debug = result._debug;
+    return res.json(json);
   } catch (err) {
     const code = err.code === "LLM_UNAVAILABLE" ? 503 : 500;
     const message = err.code === "LLM_UNAVAILABLE" ? "Služba pro generování textu je dočasně nedostupná." : (err.message || "Chyba generování.");

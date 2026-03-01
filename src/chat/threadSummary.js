@@ -3,7 +3,8 @@
  * Called after every 10 messages or when thread has no summary yet and has enough messages.
  */
 
-const { llmChat } = require("../llm/llmGateway.js");
+const { buildContextPack } = require("../context/contextEngine.js");
+const { generateText } = require("../orchestrator/generate.js");
 
 const SUMMARY_MAX_TOKENS = 250;
 
@@ -22,25 +23,32 @@ async function generateThreadSummary(threadId, requestId) {
     .map((r) => (r.role === "user" ? "Uživatel: " : "Asistent: ") + (r.content || "").slice(0, 500))
     .join("\n");
 
-  const prompt = `Shrň stručně toto konverzační vlákno do odrážek (max 200–300 slov). Formát:
+  const brief = transcript.slice(0, 4000);
+  const contextPack = await buildContextPack({
+    body: { prompt: brief, brief, outputType: "chat_thread_summary" },
+    routeName: "chat/thread_summary",
+  });
+
+  const taskPrompt = `Shrň stručně toto konverzační vlákno (v zadání) do odrážek (max 200–300 slov). Formát:
 - Klient / kontext: …
 - Cíl: …
 - Dohodnuté / navržené: …
-- Otevřené body: …
+- Otevřené body: …`;
 
-Konverzace:
----
-${transcript.slice(0, 4000)}
----`;
-
-  const { output_text } = await llmChat({
-    requestId: requestId || "summary-" + threadId,
-    model: "gpt-4o-mini",
-    messages: [{ role: "user", content: prompt }],
-    temperature: 0.3,
-    maxOutputTokens: SUMMARY_MAX_TOKENS,
-    purpose: "chat_thread_summary",
+  const result = await generateText({
+    contextPack,
+    task: taskPrompt,
+    params: {
+      requestId: requestId || "summary-" + threadId,
+      model: "gpt-4o-mini",
+      temperature: 0.3,
+      maxOutputTokens: SUMMARY_MAX_TOKENS,
+      purpose: "chat_thread_summary",
+    },
+    debug: false,
   });
+
+  const output_text = result.output_text;
 
   const summary = (output_text || "").trim();
   if (!summary) return null;

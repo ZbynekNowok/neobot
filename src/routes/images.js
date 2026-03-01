@@ -5,6 +5,8 @@ const {
   renderCompositeOnly,
   getCanvasDimensions,
 } = require("../marketing/imageCompose.js");
+const { buildContextPack } = require("../context/contextEngine.js");
+const { generateImage } = require("../orchestrator/generate.js");
 
 const imagesRouter = express.Router();
 
@@ -230,7 +232,7 @@ imagesRouter.post("/images/compose", async (req, res) => {
   const style = body.style;
   const purpose = body.purpose;
   const palette = body.palette;
-  const prompt = body.prompt;
+  const prompt = body.prompt ?? body.userPrompt;
   const brand = body.brand && typeof body.brand === "object" ? body.brand : {};
   const backgroundOnly = Boolean(body.backgroundOnly);
   const textLayout = body.textLayout && ["flyer", "balanced", "visual"].includes(body.textLayout) ? body.textLayout : "flyer";
@@ -249,26 +251,35 @@ imagesRouter.post("/images/compose", async (req, res) => {
 
   try {
     const isDev = process.env.NODE_ENV !== "production";
-    const debugPrompt = req.query?.debug === "1" && isDev;
+    const debugEnabled = req.query?.debug === "1" || isDev;
 
-    const result = await composeImageWithText(
-      {
+    const contextPack = await buildContextPack({
+      body: { ...body, prompt: prompt.trim(), userPrompt: prompt.trim(), outputType: "image" },
+      workspace: req.workspace || null,
+      routeName: "images/compose",
+    });
+
+    const result = await generateImage({
+      contextPack,
+      task: backgroundOnly ? "background" : "compose",
+      params: {
         type,
         format,
         resolution,
         style,
         purpose,
         palette,
-        prompt: prompt.trim(),
+        prompt: contextPack.brief,
+        userPrompt: contextPack.brief,
         brand,
         backgroundOnly,
         textLayout,
         textPlacement,
-        debug: debugPrompt,
         clientProfile: body.clientProfile && typeof body.clientProfile === "object" ? body.clientProfile : undefined,
+        requestId: req.id || contextPack.traceId,
       },
-      req.id || `compose-${Date.now()}`
-    );
+      debug: debugEnabled,
+    });
 
     if (backgroundOnly) {
       const json = { ok: true, background: result.background };

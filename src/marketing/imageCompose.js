@@ -77,13 +77,16 @@ const INDUSTRY_OBJECTS = {
   general: "professional studio background",
 };
 
+/** When prompt contains these, force industry to automotive (overrides profile). */
+const AUTOMOTIVE_DEALER_KEYWORDS = /\b(autobazar|auto ?bazar|bazar ?aut|prodej ?aut|prodejna ?aut|autosalon|autosal[oó]n|dealership|car ?dealer|car ?dealership|used ?cars|ojet[eé] ?vozy)\b/i;
+
 /**
  * Detect industry from prompt for contextual background (keyword matching).
  * @returns {"fashion"|"construction"|"real_estate"|"restaurant"|"fitness"|"saas"|"general"}
  */
 function detectIndustry(prompt) {
   const p = (prompt && String(prompt).toLowerCase()) || "";
-  if (/\b(auto|automotive|detailing|auto detailing|car|vozidlo|lak|politura|ceramic|car wash|mytí aut)\b/.test(p)) return "automotive";
+  if (/\b(autobazar|auto ?bazar|bazar ?aut|prodej ?aut|prodejna ?aut|autosalon|autosal[oó]n|dealership|car ?dealer|car ?dealership|used ?cars|ojet[eé] ?vozy|auto|automotive|detailing|auto detailing|car|vozidlo|lak|politura|ceramic|car wash|myt[ií] aut)\b/.test(p)) return "automotive";
   if (/\b(móda|fashion|butik|oblečen|šaty|sukně|kabát|kolekce|outfit|dámsk|pánsk|oděv)\b/.test(p)) return "fashion";
   if (/\b(stavba|stavebn[ií]|stavebn[ií]ch|rozpočet|rozpočty|projekt|úrs|rts|architekt|blueprint|výkres|stavebnictv)\b/.test(p)) return "construction";
   if (/\b(realit|nemovitost|pronájem|prodej byt|dům na prodej|architektura)\b/.test(p)) return "real_estate";
@@ -137,9 +140,10 @@ function getBackgroundPromptParams(opts) {
   const { userPrompt, topic, style, palette, purpose, brand, textLayout, textPlacement, clientProfile: clientProfileFromReq } = opts || {};
   const brief = (userPrompt && String(userPrompt).trim()) || "professional marketing visual";
   const detectedIndustry = detectIndustry(brief);
-  const effectiveIndustry = (clientProfileFromReq && clientProfileFromReq.industryLock && clientProfileFromReq.industry)
+  let effectiveIndustry = (clientProfileFromReq && clientProfileFromReq.industryLock && clientProfileFromReq.industry)
     ? getClientProfile(clientProfileFromReq, detectedIndustry).industry
     : detectedIndustry;
+  if (AUTOMOTIVE_DEALER_KEYWORDS.test(brief)) effectiveIndustry = "automotive";
   const industry = effectiveIndustry;
   const objects = INDUSTRY_OBJECTS[industry] || INDUSTRY_OBJECTS.general;
   const layoutMode = textLayout === "auto" || textLayout === "balanced" || textLayout === "visual" ? (textLayout === "auto" ? "auto" : textLayout) : "flyer";
@@ -644,6 +648,7 @@ async function composeImageWithText(options, requestId) {
   }
 
   const bgJobId = `compose-bg-${requestId || Date.now()}`;
+  const traceIdForReplicate = options._traceId || requestId;
   const bgResult = await generateBackground({
     ...bgParams,
     imageMode: "background",
@@ -653,6 +658,7 @@ async function composeImageWithText(options, requestId) {
     outputWidth: dims.outputWidth,
     outputHeight: dims.outputHeight,
     jobId: bgJobId,
+    traceId: traceIdForReplicate,
     resolution,
     debug: options.debug,
   });
@@ -720,8 +726,10 @@ async function composeImageWithText(options, requestId) {
     isRetry: false,
   });
 
+  const traceIdForGuard = options._traceId || requestId;
   let llmRes = await llmChat({
     requestId: `${requestId || "compose"}-layout`,
+    traceId: traceIdForGuard,
     model: "gpt-4o-mini",
     purpose: "image_text_layout",
     messages: [{ role: "user", content: layoutPrompt }],
@@ -741,6 +749,7 @@ async function composeImageWithText(options, requestId) {
     });
     llmRes = await llmChat({
       requestId: `${requestId || "compose"}-layout-retry`,
+      traceId: traceIdForGuard,
       model: "gpt-4o-mini",
       purpose: "image_text_layout",
       messages: [{ role: "user", content: layoutPrompt }],

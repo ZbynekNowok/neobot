@@ -69,6 +69,17 @@ try {
   });
 }
 
+// Debug (dev only): POST /api/debug/context – returns buildContextPack for given body
+if (process.env.NODE_ENV !== "production") {
+  try {
+    const { debugRouter } = require("./src/routes/debug.js");
+    app.use("/api", debugRouter);
+    console.log("debugRouter mounted: /api/debug/context (dev only)");
+  } catch (e) {
+    console.warn("debugRouter not loaded:", e.message);
+  }
+}
+
 // Historie výstupů, /api/me, /api/outputs, SEO history
 let meRouterLoaded = false;
 try {
@@ -95,6 +106,15 @@ try {
   console.log("workspaceProfileRouter mounted: /api/workspace/profile");
 } catch (e) {
   console.warn("workspaceProfileRouter not loaded:", e.message);
+}
+
+// System audit: GET /api/system/audit/context – test ContextPack + orchestrator
+try {
+  const { systemAuditRouter } = require("./src/routes/systemAudit.js");
+  app.use("/api/system/audit", systemAuditRouter);
+  console.log("systemAuditRouter mounted: /api/system/audit/context");
+} catch (e) {
+  console.warn("systemAuditRouter not loaded:", e.message);
 }
 
 // AI Ads Studio – URL → Ads Draft (F1)

@@ -598,6 +598,7 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
           purpose: purpose,
           palette: paletteMap[color] || "neutralni",
           prompt: prompt.trim(),
+          userPrompt: prompt.trim(),
           brand: profile ? { name: profile.brand_name || undefined } : {},
           backgroundOnly: true,
           textLayout: "flyer",

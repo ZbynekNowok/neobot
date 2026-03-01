@@ -55,6 +55,11 @@ function buildNegativePrompt(industryOrOpts) {
 }
 
 async function generateBackground(params) {
+  if (process.env.NODE_ENV !== "production") {
+    const { assertContextUsed } = require("../context/contextGuard.js");
+    const tid = params?.traceId || params?.jobId;
+    if (tid) assertContextUsed(tid);
+  }
   const {
     prompt: legacyPrompt,
     negativePrompt: legacyNegative,
@@ -188,6 +193,11 @@ async function generateBackground(params) {
  * @returns {{ publicUrl: string, width: number, height: number, resolution?: string }}
  */
 async function generateFromImage(params) {
+  if (process.env.NODE_ENV !== "production") {
+    const { assertContextUsed } = require("../context/contextGuard.js");
+    const tid = params?.traceId || params?.jobId;
+    if (tid) assertContextUsed(tid);
+  }
   const {
     imageUrl,
     prompt,

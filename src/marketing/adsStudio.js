@@ -3,8 +3,12 @@
 const crypto = require("crypto");
 const { fetch } = require("undici");
 const cheerio = require("cheerio");
-const { llmChat } = require("../llm/llmGateway.js");
-const { generateBackground, generateFromImage, buildNegativePrompt } = require("../imageProviders/replicate.js");
+const { buildContextPack } = require("../context/contextEngine.js");
+const {
+  generateText,
+  generateBackgroundWithContext,
+  generateFromImageWithContext,
+} = require("../orchestrator/generate.js");
 const { detectIndustry } = require("./imageCompose.js");
 const { getClientProfile } = require("./clientProfile.js");
 
@@ -139,43 +143,24 @@ async function fetchUrlContent(url) {
 async function analyzeUrlAndDraftAds(url, requestId = "ads-draft") {
   const content = await fetchUrlContent(url);
 
-  const prompt = `Jsi expert na reklamu a brand. Na základě následujícího obsahu webu vytvoř:
+  const brief = `Title: ${content.title}\nMeta description: ${content.metaDescription}\n\nTělo (nadpisy + odstavce):\n${content.bodyText}`;
+  const contextPack = await buildContextPack({
+    body: { prompt: brief, brief, url, outputType: "ads_draft" },
+    routeName: "ads/draft",
+  });
+
+  const taskPrompt = `Jsi expert na reklamu a brand. Na základě obsahu webu (v zadání) vytvoř:
 1) Stručný brand summary (název, popis, služby, USP, tón, cílová skupina).
 2) Reklamní texty pro Meta (Facebook/Instagram) a Google Ads.
-
-OBSAH WEBU:
-Title: ${content.title}
-Meta description: ${content.metaDescription}
-
-Tělo (nadpisy + odstavce):
-${content.bodyText}
-
 Vrať JEDINĚ platný JSON bez markdown a bez textu před/za ním. Struktura:
-{
-  "brand": {
-    "name": "string",
-    "description": "string",
-    "services": ["string"],
-    "usp": ["string"],
-    "tone": "string",
-    "target_audience": "string"
-  },
-  "ads": {
-    "meta_primary_texts": ["string"] (přesně 5 položek, hlavní text pro Meta),
-    "meta_headlines": ["string"] (přesně 5 položek, krátké headlines),
-    "google_headlines": ["string"] (přesně 10 položek, max 30 znaků),
-    "google_descriptions": ["string"] (přesně 6 položek, max 90 znaků)
-  }
-}
-Všechny texty v češtině. Pole services a usp mohou mít 0 až cca 10 položek. Ostatní pole přesně v uvedeném počtu.`;
+{ "brand": { "name", "description", "services", "usp", "tone", "target_audience" }, "ads": { "meta_primary_texts" (5), "meta_headlines" (5), "google_headlines" (10, max 30 znaků), "google_descriptions" (6, max 90 znaků) } }
+Všechny texty v češtině. Pole services a usp 0–10 položek. Ostatní pole přesně v uvedeném počtu.`;
 
-  const response = await llmChat({
-    requestId,
-    model: "gpt-4o-mini",
-    purpose: "ads_draft",
-    messages: [{ role: "user", content: prompt }],
-    temperature: 0.7,
-    maxOutputTokens: 4000,
+  const response = await generateText({
+    contextPack,
+    task: taskPrompt,
+    params: { requestId, model: "gpt-4o-mini", purpose: "ads_draft", temperature: 0.7, maxOutputTokens: 4000 },
+    debug: false,
   });
 
   const text = (response.output_text || "").trim();
@@ -275,30 +260,19 @@ function getResolutionDims(format, resolutionInput) {
  */
 async function getBrandContextFromUrl(url, requestId = "ads-brand") {
   const content = await fetchUrlContent(url);
-  const prompt = `Na základě obsahu webu vrať JEDINĚ platný JSON (žádný další text) s brand summary. Struktura:
-{
-  "brand": {
-    "name": "string",
-    "description": "string",
-    "services": ["string"],
-    "usp": ["string"],
-    "tone": "string",
-    "target_audience": "string"
-  }
-}
-OBSAH WEBU:
-Title: ${content.title}
-Meta: ${content.metaDescription}
-Tělo: ${content.bodyText.slice(0, 4000)}
-Vše v češtině. Pole services a usp 0–10 položek.`;
+  const brief = `Title: ${content.title}\nMeta: ${content.metaDescription}\nTělo: ${content.bodyText.slice(0, 4000)}`;
+  const contextPack = await buildContextPack({
+    body: { prompt: brief, brief, url, outputType: "ads_brand_context" },
+    routeName: "ads/brand_context",
+  });
 
-  const response = await llmChat({
-    requestId,
-    model: "gpt-4o-mini",
-    purpose: "ads_brand_context",
-    messages: [{ role: "user", content: prompt }],
-    temperature: 0.5,
-    maxOutputTokens: 1500,
+  const taskPrompt = `Na základě obsahu webu (v zadání) vrať JEDINĚ platný JSON (žádný další text) s brand summary. Struktura: { "brand": { "name", "description", "services", "usp", "tone", "target_audience" } }. Vše v češtině. Pole services a usp 0–10 položek.`;
+
+  const response = await generateText({
+    contextPack,
+    task: taskPrompt,
+    params: { requestId, model: "gpt-4o-mini", purpose: "ads_brand_context", temperature: 0.5, maxOutputTokens: 1500 },
+    debug: false,
   });
 
   const text = (response.output_text || "").trim();
@@ -349,21 +323,19 @@ async function generateImagesFromUrl(url, options = {}) {
 
   const brand = await getBrandContextFromUrl(url, requestId);
 
-  const promptForPrompts = `Jsi expert na reklamní vizuály. Pro brand "${brand.name}" (${brand.description}) vytvoř ${count} nápadů na reklamní obrázky.
-Cílová skupina: ${brand.target_audience}. Tón: ${brand.tone}. USP: ${(brand.usp || []).slice(0, 5).join(", ")}.
-Pro každý obrázek vrať krátký popis scény pro generování obrázku (v angličtině, pro AI image model): co má být na obrázku, nálada, styl. BEZ textu v obrázku.
-A také krátký caption/headline v češtině pro sociální sítě (CTA).
-Vrať JEDINĚ platný JSON:
-{ "items": [ { "prompt": "english scene description for image, no text in image", "caption": "český caption / CTA" }, ... ] }
-Přesně ${count} položek v items.`;
+  const brief = `${brand.name}: ${brand.description}. Cílová skupina: ${brand.target_audience}. Tón: ${brand.tone}. USP: ${(brand.usp || []).slice(0, 5).join(", ")}.`;
+  const contextPack = await buildContextPack({
+    body: { prompt: brief, brief, url, outputType: "ads_image_prompts", clientProfile: { brandName: brand.name } },
+    routeName: "ads/images",
+  });
 
-  const llmRes = await llmChat({
-    requestId: `${requestId}-prompts`,
-    model: "gpt-4o-mini",
-    purpose: "ads_image_prompts",
-    messages: [{ role: "user", content: promptForPrompts }],
-    temperature: 0.8,
-    maxOutputTokens: 2000,
+  const taskPrompt = `Pro brand (viz zadání) vytvoř ${count} nápadů na reklamní obrázky. Pro každý obrázek: krátký popis scény v angličtině pro AI image model (co na obrázku, nálada, styl). BEZ textu v obrázku. A krátký caption/headline v češtině (CTA). Vrať JEDINĚ platný JSON: { "items": [ { "prompt": "english scene description", "caption": "český caption" }, ... ] }. Přesně ${count} položek v items.`;
+
+  const llmRes = await generateText({
+    contextPack,
+    task: taskPrompt,
+    params: { requestId: `${requestId}-prompts`, model: "gpt-4o-mini", purpose: "ads_image_prompts", temperature: 0.8, maxOutputTokens: 2000 },
+    debug: debug,
   });
 
   const text = (llmRes.output_text || "").trim();
@@ -378,14 +350,13 @@ Přesně ${count} položek v items.`;
     throw new Error("Neplatný JSON pro image prompts");
   }
 
-  const fallbackIndustry = detectIndustry(brand.description || brand.name || "");
+  const industry = contextPack.resolvedIndustry;
   const clientProfile = (options.clientProfile && typeof options.clientProfile === "object")
     ? getClientProfile(
         { ...options.clientProfile, style: options.clientProfile.style || options.clientProfile.brandStyle },
-        fallbackIndustry
+        industry
       )
-    : { industry: fallbackIndustry, brandName: brand.name || null };
-  const industry = clientProfile.industry;
+    : { industry, brandName: brand.name || null };
   const formatsToGenerate = []; // { format: "square"|"story", index }
   if (format === "both") {
     const half = Math.floor(count / 2);
@@ -413,18 +384,22 @@ Přesně ${count} položek v items.`;
     for (let attempt = 0; attempt <= BACKOFF_DELAYS_MS.length; attempt++) {
       try {
         result = await Promise.race([
-          generateBackground({
-            clientProfile,
-            campaignPrompt: promptText,
-            industry,
-            imageMode: "ads",
-            variationKey: `${requestId}-${i}`,
-            width: generateWidth,
-            height: generateHeight,
-            outputWidth,
-            outputHeight,
-            jobId: attempt === 0 ? jobId : `${jobId}-retry${attempt}`,
-            resolution,
+          generateBackgroundWithContext({
+            contextPack,
+            params: {
+              clientProfile,
+              campaignPrompt: promptText,
+              industry,
+              imageMode: "ads",
+              variationKey: `${requestId}-${i}`,
+              width: generateWidth,
+              height: generateHeight,
+              outputWidth,
+              outputHeight,
+              jobId: attempt === 0 ? jobId : `${jobId}-retry${attempt}`,
+              resolution,
+              debug: i === 0 ? debug : false,
+            },
             debug: i === 0 ? debug : false,
           }),
           new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), IMAGE_GENERATION_TIMEOUT_MS)),
@@ -493,24 +468,20 @@ async function generateProductVariants(options) {
     industrial: "industrial, raw, urban",
   }[style] || "modern, clean";
 
-  const productContext = productName
-    ? productName
-    : "product";
+  const productContext = productName ? productName : "product";
 
-  const promptForScenes = `Jsi expert na reklamní vizuály. Vytvoř ${variants} nápadů na reklamní scény pro produkt: "${productContext}".
-Styl: ${stylePrompt}. Pro každou scénu:
-1) prompt v angličtině pro AI image model (image-to-image): popis scény (studio, lifestyle, environment), kde HLAVNÍ OBJEKT je produkt z nahrané fotky. Napiš: "Use the provided product photo as the main subject. Keep product identity, shape, colors." + popis prostředí (např. "in a modern studio with soft lighting", "on a marble surface", "in lifestyle setting"). ŽÁDNÝ text v obrázku (NO text, NO logo overlay). Realistické reklamní scény.
-2) caption v češtině (krátký reklamní text / CTA).
-Vrať JEDINĚ platný JSON: { "items": [ { "prompt": "english scene description...", "caption": "český caption" }, ... ] }
-Přesně ${variants} položek v items.`;
+  const contextPack = await buildContextPack({
+    body: { prompt: productContext, brief: productContext, outputType: "ads_product_scenes", productName: productContext },
+    routeName: "ads/product-variants",
+  });
 
-  const llmRes = await llmChat({
-    requestId: `${requestId}-prompts`,
-    model: "gpt-4o-mini",
-    purpose: "ads_product_scenes",
-    messages: [{ role: "user", content: promptForScenes }],
-    temperature: 0.8,
-    maxOutputTokens: 2000,
+  const taskPrompt = `Vytvoř ${variants} nápadů na reklamní scény pro produkt (viz zadání). Styl: ${stylePrompt}. Pro každou scénu: 1) prompt v angličtině pro AI image model (image-to-image): "Use the provided product photo as the main subject. Keep product identity, shape, colors." + popis prostředí (studio, lifestyle). ŽÁDNÝ text v obrázku. 2) caption v češtině (CTA). Vrať JEDINĚ platný JSON: { "items": [ { "prompt": "english...", "caption": "český caption" }, ... ] }. Přesně ${variants} položek.`;
+
+  const llmRes = await generateText({
+    contextPack,
+    task: taskPrompt,
+    params: { requestId: `${requestId}-prompts`, model: "gpt-4o-mini", purpose: "ads_product_scenes", temperature: 0.8, maxOutputTokens: 2000 },
+    debug,
   });
 
   const text = (llmRes.output_text || "").trim();
@@ -525,14 +496,13 @@ Přesně ${variants} položek v items.`;
     throw new Error("Neplatný JSON pro product scenes");
   }
 
-  const fallbackIndustry = detectIndustry(productName || productContext || "");
+  const industry = contextPack.resolvedIndustry;
   const clientProfile = (options.clientProfile && typeof options.clientProfile === "object")
     ? getClientProfile(
         { ...options.clientProfile, style: options.clientProfile.style || options.clientProfile.brandStyle },
-        fallbackIndustry
+        industry
       )
-    : { industry: fallbackIndustry, brandName: null };
-  const industry = clientProfile.industry;
+    : { industry, brandName: null };
   const formatsToGenerate = [];
   if (format === "both") {
     const half = Math.floor(variants / 2);
@@ -561,19 +531,23 @@ Přesně ${variants} položek v items.`;
       const attemptJobId = attempt === 0 ? jobId : `${baseJobId}-retry${attempt}`;
       try {
         result = await Promise.race([
-          generateFromImage({
-            imageUrl: publicImageUrl,
-            prompt: promptText,
-            clientProfile,
-            industry,
-            variationKey: `${requestId}-${i}`,
-            width: generateWidth,
-            height: generateHeight,
-            outputWidth,
-            outputHeight,
-            jobId: attemptJobId,
-            promptStrength: 0.7,
-            resolution,
+          generateFromImageWithContext({
+            contextPack,
+            params: {
+              imageUrl: publicImageUrl,
+              prompt: promptText,
+              clientProfile,
+              industry,
+              variationKey: `${requestId}-${i}`,
+              width: generateWidth,
+              height: generateHeight,
+              outputWidth,
+              outputHeight,
+              jobId: attemptJobId,
+              promptStrength: 0.7,
+              resolution,
+              debug: i === 0 ? debug : false,
+            },
             debug: i === 0 ? debug : false,
           }),
           new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), IMAGE_GENERATION_TIMEOUT_MS)),

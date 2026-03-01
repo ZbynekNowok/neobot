@@ -2,12 +2,8 @@
 
 const express = require("express");
 const crypto = require("crypto");
-const { llmChat } = require("../llm/llmGateway.js");
-const {
-  generateBackground,
-  buildPrompt,
-  buildNegativePrompt,
-} = require("../imageProviders/replicate.js");
+const { buildContextPack } = require("../context/contextEngine.js");
+const { generateDesignBackground, generateText } = require("../orchestrator/generate.js");
 
 let getAuthUser, ensureWorkspace, getProfileByWorkspaceId, saveOutput;
 try {
@@ -121,32 +117,36 @@ designRouter.post("/design/social-card/draft", getAuthUser, ensureWorkspace, asy
   const formatKey = getFormatKey(rawFormat);
   const dims = FORMAT_DIMENSIONS[formatKey];
   const jobId = crypto.randomUUID();
+  const debugEnabled = req.query?.debug === "1" || process.env.NODE_ENV !== "production";
 
   try {
-    const bgPrompt = buildPrompt({
-      industry: profile?.industry || "",
-      style: style || "minimal",
-      purpose: purpose || "sale",
-      palette: palette || "neutral",
-      description: fullUserBrief || "social media marketing visual with clean negative space",
-      brand: profile ? { primary: "#2563eb", accent: "#7c3aed", name: profile.business_name || "" } : {},
-    });
-    const negativePrompt = buildNegativePrompt();
-    const bgResult = await generateBackground({
-      prompt: bgPrompt,
-      negativePrompt,
-      width: dims.width,
-      height: dims.height,
-      jobId,
+    const contextPack = await buildContextPack({
+      body: {
+        prompt: fullUserBrief,
+        userPrompt: fullUserBrief,
+        brief: fullUserBrief,
+        clientProfile: profile ? { industry: profile.industry, brandName: profile.business_name } : null,
+        outputType: "design_social_card",
+      },
+      workspace: req.workspace || null,
+      routeName: "design/social-card/draft",
     });
 
-    const background = {
-      imageUrl: bgResult.publicUrl,
-      width: bgResult.width,
-      height: bgResult.height,
-      engine: "replicate_sdxl",
-      model: bgResult.model,
-    };
+    const bgResult = await generateDesignBackground({
+      contextPack,
+      params: {
+        width: dims.width,
+        height: dims.height,
+        style: style || "minimal",
+        purpose: purpose || "sale",
+        palette: palette || "neutral",
+        brand: profile ? { primary: "#2563eb", accent: "#7c3aed", name: profile.business_name || "" } : {},
+        jobId,
+      },
+      debug: debugEnabled,
+    });
+
+    const background = bgResult.background;
 
     const contextLines = [];
     if (profile) {
@@ -161,7 +161,7 @@ designRouter.post("/design/social-card/draft", getAuthUser, ensureWorkspace, asy
     if (keywords.length) contextLines.push("Klíčová slova: " + keywords.join(", "));
     const contextBlock = contextLines.length ? "Kontekst klienta a kampaně:\n" + contextLines.join("\n") + "\n\n" : "";
 
-    const llmPrompt = `${contextBlock}Vytvoř návrh textů pro jeden vizuál na sociální sítě. Výstup vrať JEDINĚ jako platný JSON (žádný další text):
+    const taskPrompt = `${contextBlock}Vytvoř návrh textů pro jeden vizuál na sociální sítě. Výstup vrať JEDINĚ jako platný JSON (žádný další text):
 {
   "headline": string,
   "subheadline": string | null,
@@ -172,13 +172,16 @@ Piš česky. Headline úderný, max ~8 slov. CTA krátké.`;
 
     let texts = { headline: "", subheadline: null, bullets: [], cta: "Zjistit více" };
     try {
-      const llmRes = await llmChat({
-        requestId: req.id || jobId,
-        model: "gpt-4o-mini",
-        purpose: "social_card_text",
-        messages: [{ role: "user", content: llmPrompt }],
-        temperature: 0.8,
-        maxOutputTokens: 600,
+      const llmRes = await generateText({
+        contextPack,
+        task: taskPrompt,
+        params: {
+          model: "gpt-4o-mini",
+          purpose: "social_card_text",
+          temperature: 0.8,
+          maxOutputTokens: 600,
+        },
+        debug: debugEnabled,
       });
       const rawText = (llmRes.output_text || "").trim();
       const jsonMatch = rawText.match(/\{[\s\S]*\}/);
@@ -224,7 +227,11 @@ Piš česky. Headline úderný, max ~8 slov. CTA krátké.`;
       } catch (_) {}
     }
 
-    res.json({ ok: true, template });
+    const response = { ok: true, template };
+    if (debugEnabled) {
+      response._debug = { ...(bgResult._debug || {}), ...(typeof llmRes !== "undefined" && llmRes._debug ? llmRes._debug : {}) };
+    }
+    res.json(response);
   } catch (err) {
     const message = err && err.message ? String(err.message) : "Generation failed";
     console.error("[design/social-card/draft] failed:", message, err);

@@ -22,15 +22,22 @@ function isRetryable(err) {
 /**
  * Single LLM call with timeout, retry (429 + 5xx only), and structured logging.
  * Uses chat.completions API. Returns { output_text } for compatibility.
+ * When traceId is provided (from orchestrator), DEV guard asserts context usage.
  */
 async function llmChat({
   requestId,
+  traceId,
   model = "gpt-4o-mini",
   messages,
   temperature = 0.7,
   maxOutputTokens,
   purpose = "neobot_chat",
 }) {
+  if (process.env.NODE_ENV !== "production") {
+    const { assertContextUsed } = require("../context/contextGuard.js");
+    const tid = traceId || requestId;
+    if (tid) assertContextUsed(tid);
+  }
   const started = Date.now();
   const maxRetries = 2;
   const timeoutMs = Number(process.env.LLM_TIMEOUT_MS || 45000);

@@ -6,14 +6,21 @@ neobot.db
 neobot.db-wal
 neobot.db-shm
 
-# Environment files
+# Environment files (ignore all real env files)
 .env
 .env.*
 *.env
 frontend/**/.env
 backend/**/.env
-
-# Prevent accidental secrets
 .env.local
 .env.production
 .env.development
+
+# Allow .env.example to be committed
+!.env.example
+!frontend/**/.env.example
+!backend/**/.env.example
+
+# Generated image outputs
+public/outputs/
+public/outputs/**
