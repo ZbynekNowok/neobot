@@ -1,14 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useTaskOutputSaver } from "@/hooks/useTaskOutputSaver";
 import TaskContextBanner from "@/components/app/TaskContextBanner";
 import { NEOBOT_API_BASE, NEOBOT_API_KEY, saveOutputToHistory, neobotFetch } from "@/lib/neobot";
-import { 
+import {
   ArrowRight,
   Image,
-  Instagram,
-  ShoppingBag,
-  Megaphone,
-  Palette,
   Wand2,
   ChevronDown,
   Loader2,
@@ -23,30 +19,26 @@ import {
   Video,
   CalendarCheck,
   LayoutTemplate,
-  Type
+  Type,
 } from "lucide-react";
+import {
+  functionCategories,
+  styleOptions,
+  formatOptions,
+  purposeOptions,
+  colorOptions,
+  type ImageFunction,
+  type FunctionCategory,
+} from "./imageNeoBotConstants";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Label } from "@/components/ui/label";
+import { Slider } from "@/components/ui/slider";
 import { Stage, Layer, Image as KonvaImage, Text as KonvaText, Group, Rect } from "react-konva";
 import { UserProfile } from "@/components/app/AppLayout";
 import NeoBotSteps from "@/components/app/NeoBotSteps";
 import { toast } from "sonner";
-
-interface ImageFunction {
-  id: string;
-  label: string;
-  description: string;
-  defaultFormat: "square" | "portrait" | "landscape" | "story";
-}
-
-interface FunctionCategory {
-  id: string;
-  title: string;
-  icon: React.ElementType;
-  functions: ImageFunction[];
-}
 
 interface ImageSection {
   id: string;
@@ -71,6 +63,35 @@ interface ComposeState {
   format: "square" | "story" | "landscape";
   resolution: "preview" | "standard" | "high";
 }
+
+type TextLayoutKey = "headline" | "subheadline" | "cta";
+
+interface TextLayoutItemBase {
+  xPct: number;
+  yPct: number;
+  fontSize: number;
+  color: string;
+  useAutoContrast?: boolean;
+}
+
+interface CtaLayoutItem extends TextLayoutItemBase {
+  widthPct: number;
+  heightPct: number;
+  bgColor?: string;
+  borderRadius?: number;
+}
+
+type TextLayoutItem = TextLayoutItemBase | CtaLayoutItem;
+
+function isCtaLayout(item: TextLayoutItem): item is CtaLayoutItem {
+  return "widthPct" in item && "heightPct" in item;
+}
+
+const DEFAULT_LAYOUT: Record<TextLayoutKey, TextLayoutItem> = {
+  headline: { xPct: 0.07, yPct: 0.17, fontSize: 48, color: "#ffffff", useAutoContrast: true },
+  subheadline: { xPct: 0.07, yPct: 0.22, fontSize: 24, color: "#ffffff", useAutoContrast: true },
+  cta: { xPct: 0.07, yPct: 0.28, widthPct: 0.26, heightPct: 0.06, fontSize: 20, color: "#ffffff", bgColor: "#2563eb", borderRadius: 999, useAutoContrast: true },
+};
 
 /** Canvas dimensions for compose (must match backend getCanvasDimensions). */
 function getCanvasDimensions(format: string, resolution: string): { width: number; height: number } {
@@ -183,97 +204,182 @@ function ComposeCanvas({
   );
 }
 
-// Each function now has a defaultFormat derived from type
-const functionCategories: FunctionCategory[] = [
-  {
-    id: "social",
-    title: "Sociální sítě",
-    icon: Instagram,
-    functions: [
-      { id: "instagram-post", label: "Příspěvek na Instagram", description: "Vizuálně atraktivní grafika pro Instagram feed.", defaultFormat: "square" },
-      { id: "facebook-post", label: "Facebook post", description: "Vizuál optimalizovaný pro Facebook.", defaultFormat: "landscape" },
-      { id: "stories", label: "Instagram Stories", description: "Vertikální grafika pro příběhy.", defaultFormat: "story" },
-      { id: "reel-cover", label: "Reel cover / náhled", description: "Poutavý náhled pro Reels nebo TikTok.", defaultFormat: "portrait" },
-    ]
-  },
-  {
-    id: "products",
-    title: "Produkty & e-shop",
-    icon: ShoppingBag,
-    functions: [
-      { id: "product-visual", label: "Produktový vizuál", description: "Profesionální vizualizace produktu.", defaultFormat: "square" },
-      { id: "lifestyle", label: "Lifestyle fotka", description: "Produkt v reálném prostředí.", defaultFormat: "landscape" },
-      { id: "white-bg", label: "Produkt na bílém pozadí", description: "Čistá produktová fotografie.", defaultFormat: "square" },
-      { id: "banner", label: "Produktový banner", description: "Banner pro e-shop nebo reklamu.", defaultFormat: "landscape" },
-    ]
-  },
-  {
-    id: "ads",
-    title: "Reklama & bannery",
-    icon: Megaphone,
-    functions: [
-      { id: "ad-banner", label: "Reklamní banner", description: "Banner pro online reklamní kampaně.", defaultFormat: "landscape" },
-      { id: "hero-visual", label: "Hero vizuál", description: "Hlavní vizuál pro kampaň.", defaultFormat: "landscape" },
-      { id: "promo", label: "Promo grafika", description: "Grafika pro akce a novinky.", defaultFormat: "square" },
-      { id: "banner-16-9", label: "Banner (16:9)", description: "Široký banner pro web a reklamu.", defaultFormat: "landscape" },
-      { id: "letak-4-5", label: "Leták / promo (4:5)", description: "Vertikální leták pro Instagram a print.", defaultFormat: "portrait" },
-      { id: "letak-1-1", label: "Leták / promo (1:1)", description: "Čtvercový leták pro sociální sítě.", defaultFormat: "square" },
-    ]
-  },
-  {
-    id: "branding",
-    title: "Branding & identita",
-    icon: Palette,
-    functions: [
-      { id: "brand-visual", label: "Vizuál značky", description: "Vizuál reprezentující hodnoty značky.", defaultFormat: "square" },
-      { id: "moodboard", label: "Moodboard", description: "Inspirační koláž pro vizuální směr.", defaultFormat: "landscape" },
-      { id: "style-images", label: "Stylové obrázky", description: "Série konzistentních vizuálů.", defaultFormat: "square" },
-    ]
-  },
-  {
-    id: "edits",
-    title: "Úpravy & varianty",
-    icon: Wand2,
-    functions: [
-      { id: "variant", label: "Varianta vizuálu", description: "Nová verze stávajícího obrázku.", defaultFormat: "square" },
-      { id: "style-change", label: "Jiný styl", description: "Změna stylu nebo atmosféry.", defaultFormat: "square" },
-      { id: "format-change", label: "Jiný formát", description: "Přizpůsobení poměru stran.", defaultFormat: "square" },
-    ]
-  },
-];
+const HEADER_OFFSET_PX = 220;
+
+/** Interactive text editor: overlay divs over image with drag (%), font size, color. */
+function ComposeEditor({
+  composeState,
+  draftTexts,
+  backgroundImageUrl,
+  layout,
+  setLayout,
+  selectedLayer,
+  onSelectLayer,
+  scale: scaleProp,
+  fillContainer,
+  containerRef: containerRefProp,
+  aspectRatio,
+}: {
+  composeState: ComposeState;
+  draftTexts: { headline: string; subheadline: string; bullets: string[]; cta: string };
+  backgroundImageUrl: string;
+  layout: Record<TextLayoutKey, TextLayoutItem>;
+  setLayout: React.Dispatch<React.SetStateAction<Record<TextLayoutKey, TextLayoutItem>>>;
+  selectedLayer: TextLayoutKey | null;
+  onSelectLayer: (key: TextLayoutKey | null) => void;
+  scale: number;
+  fillContainer?: boolean;
+  containerRef?: React.RefObject<HTMLDivElement | null>;
+  aspectRatio?: number;
+}) {
+  const internalRef = useRef<HTMLDivElement>(null);
+  const containerRef = containerRefProp ?? internalRef;
+  const [dragging, setDragging] = useState<{
+    id: TextLayoutKey;
+    startX: number;
+    startY: number;
+    startXPct: number;
+    startYPct: number;
+  } | null>(null);
+  const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
+
+  const { width: canvasWidth, height: canvasHeight } = getCanvasDimensions(composeState.format, composeState.resolution);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || !fillContainer) return;
+    const ro = new ResizeObserver(() => {
+      const rect = el.getBoundingClientRect();
+      setContainerSize({ w: rect.width, h: rect.height });
+    });
+    ro.observe(el);
+    const rect = el.getBoundingClientRect();
+    setContainerSize({ w: rect.width, h: rect.height });
+    return () => ro.disconnect();
+  }, [fillContainer, containerRef]);
+
+  const scale = fillContainer && containerSize.w > 0 && containerSize.h > 0
+    ? Math.min(containerSize.w / canvasWidth, containerSize.h / canvasHeight, 1)
+    : scaleProp;
+
+  const handleMouseMove = useCallback(
+    (e: MouseEvent) => {
+      if (!dragging || !containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const deltaXPct = (e.clientX - dragging.startX) / rect.width;
+      const deltaYPct = (e.clientY - dragging.startY) / rect.height;
+      const xPct = Math.max(0, Math.min(1, dragging.startXPct + deltaXPct));
+      const yPct = Math.max(0, Math.min(1, dragging.startYPct + deltaYPct));
+      setLayout((prev) => {
+        const next = { ...prev[dragging.id], xPct, yPct };
+        return { ...prev, [dragging.id]: next };
+      });
+    },
+    [dragging, setLayout]
+  );
+
+  const handleMouseUp = useCallback(() => setDragging(null), []);
+
+  useEffect(() => {
+    if (!dragging) return;
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [dragging, handleMouseMove, handleMouseUp]);
+
+  const items: { key: TextLayoutKey; label: string; text: string; isButton?: boolean }[] = [
+    { key: "headline", label: "Nadpis", text: draftTexts.headline || "Nadpis" },
+    { key: "subheadline", label: "Podnadpis", text: draftTexts.subheadline || "Podnadpis" },
+    { key: "cta", label: "CTA", text: draftTexts.cta || "CTA", isButton: true },
+  ];
+
+  return (
+    <div
+      ref={containerRef}
+      className="relative rounded-lg overflow-hidden select-none"
+      style={
+        fillContainer
+          ? { width: "100%", height: "100%", aspectRatio: canvasWidth / canvasHeight, maxWidth: "100%", maxHeight: "100%" }
+          : { width: canvasWidth * scale, height: canvasHeight * scale, maxWidth: "100%" }
+      }
+    >
+      <img
+        src={backgroundImageUrl}
+        alt="Background"
+        className={`absolute inset-0 w-full h-full pointer-events-none ${fillContainer ? "object-contain" : "object-cover"}`}
+        draggable={false}
+      />
+      {items.map(({ key, label, text, isButton }) => {
+        const item = layout[key];
+        const isSelected = selectedLayer === key;
+        const leftPct = item.xPct * 100;
+        const topPct = item.yPct * 100;
+        if (isButton && isCtaLayout(item)) {
+          const ctaBg = item.bgColor && /^#[0-9a-fA-F]{3,8}$/.test(item.bgColor) ? item.bgColor : "#2563eb";
+          return (
+            <div
+              key={key}
+              role="button"
+              tabIndex={0}
+              className="absolute cursor-move rounded-full px-6 py-3 flex items-center justify-center font-semibold whitespace-nowrap outline-none"
+              style={{
+                left: `${leftPct}%`,
+                top: `${topPct}%`,
+                width: `${item.widthPct * 100}%`,
+                minHeight: 44,
+                fontSize: Math.max(10, Math.min(24, Math.round(item.fontSize * scale))),
+                backgroundColor: ctaBg,
+                color: item.color,
+                boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+                border: isSelected ? "2px solid var(--primary)" : "2px solid transparent",
+              }}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                if (e.button === 0) {
+                  onSelectLayer(key);
+                  setDragging({ id: key, startX: e.clientX, startY: e.clientY, startXPct: item.xPct, startYPct: item.yPct });
+                }
+              }}
+            >
+              {text || label}
+            </div>
+          );
+        }
+        return (
+          <div
+            key={key}
+            role="button"
+            tabIndex={0}
+            className="absolute cursor-move font-bold whitespace-pre-wrap outline-none max-w-[85%]"
+            style={{
+              left: `${leftPct}%`,
+              top: `${topPct}%`,
+              fontSize: Math.max(10, Math.min(72, Math.round(item.fontSize * scale))),
+              color: item.color,
+              textShadow: "0 1px 3px rgba(0,0,0,0.5)",
+              border: isSelected ? "2px solid var(--primary)" : "2px solid transparent",
+              lineHeight: 1.2,
+            }}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              if (e.button === 0) {
+                onSelectLayer(key);
+                setDragging({ id: key, startX: e.clientX, startY: e.clientY, startXPct: item.xPct, startYPct: item.yPct });
+              }
+            }}
+          >
+            {text || label}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 type OutputMode = "visual" | "marketing";
-
-// Quick settings
-const styleOptions = [
-  { id: "minimalist", label: "Minimalistický" },
-  { id: "luxury", label: "Luxusní" },
-  { id: "playful", label: "Hravý" },
-  { id: "natural", label: "Přirozený" },
-];
-
-const formatOptions = [
-  { id: "square", label: "1:1 (čtverec)" },
-  { id: "portrait", label: "9:16 (výška)" },
-  { id: "landscape", label: "16:9 (šířka)" },
-  { id: "story", label: "Story (9:16)" },
-];
-
-const purposeOptions = [
-  { id: "prodej", label: "Prodej" },
-  { id: "brand", label: "Brand" },
-  { id: "engagement", label: "Engagement" },
-  { id: "edukace", label: "Edukace" },
-];
-
-const colorOptions = [
-  { id: "neutral", label: "Neutrální" },
-  { id: "warm", label: "Teplé" },
-  { id: "cool", label: "Studené" },
-  { id: "vibrant", label: "Výrazné" },
-];
-
-
 type Step = "select" | "input" | "proposal" | "output";
 
 interface ImageNeoBotWorkspaceProps {
@@ -297,7 +403,6 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
   const [keywords, setKeywords] = useState("");
   const [offer, setOffer] = useState("");
   const [marketingStep, setMarketingStep] = useState(0);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
   // Draft response texts (editable after generation)
   const [draftTexts, setDraftTexts] = useState<{ headline: string; subheadline: string; bullets: string[]; cta: string }>({ headline: "", subheadline: "", bullets: [], cta: "" });
 
@@ -306,16 +411,23 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
   const [format, setFormat] = useState("square");
   const [purpose, setPurpose] = useState("prodej");
   const [color, setColor] = useState("neutral");
-  const [textLayout, setTextLayout] = useState<"flyer" | "balanced" | "visual">("flyer");
-  const [textPlacement, setTextPlacement] = useState<"auto" | "bottom_left" | "bottom_center" | "top_left" | "top_center" | "center" | "right_panel">("bottom_left");
+  const [textLayout, setTextLayout] = useState<"auto" | "flyer" | "balanced" | "visual">("auto");
+  const [textPlacement, setTextPlacement] = useState<"auto" | "bottom_left" | "bottom_center" | "top_left" | "top_center" | "center" | "right_panel">("auto");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   
   // Output data
   const [imageOutput, setImageOutput] = useState<ImageOutputData | null>(null);
   const [composeState, setComposeState] = useState<ComposeState | null>(null);
+  const [layout, setLayout] = useState<Record<TextLayoutKey, TextLayoutItem>>(DEFAULT_LAYOUT);
+  const [selectedLayer, setSelectedLayer] = useState<TextLayoutKey | null>(null);
   const [loadingCompose, setLoadingCompose] = useState(false);
   const [loadingRender, setLoadingRender] = useState(false);
   const [errorCompose, setErrorCompose] = useState<string | null>(null);
   const [errorRender, setErrorRender] = useState<string | null>(null);
+  const [editMode, setEditMode] = useState(false);
+  const [lastComposeMeta, setLastComposeMeta] = useState<{ backgroundUrl: string; format: string; resolution: string } | null>(null);
+  const initialLayoutRef = useRef<Record<TextLayoutKey, TextLayoutItem> | null>(null);
+  const previewContainerRef = useRef<HTMLDivElement>(null);
   const [backgroundImage, setBackgroundImage] = useState<HTMLImageElement | null>(null);
   const { taskContext, saveOutputToTask, isSavingToTask, savedToTask, navigateBackToTask } = useTaskOutputSaver();
 
@@ -338,6 +450,39 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
       img.src = "";
     };
   }, [composeState?.backgroundUrl]);
+
+  // Sync layout (layoutOverrides) from composeState.layers when we get new layers from API (px → %). Store initial for "Zrušit úpravy".
+  useEffect(() => {
+    const layers = composeState?.layers;
+    if (!Array.isArray(layers) || !composeState) return;
+    const { width: cw, height: ch } = getCanvasDimensions(composeState.format, composeState.resolution);
+    const headline = layers.find((l: any) => l.type === "text" && l.id === "headline");
+    const subheadline = layers.find((l: any) => l.type === "text" && l.id === "subheadline");
+    const cta = layers.find((l: any) => (l.type === "text" || l.type === "button") && l.id === "cta");
+    const nextLayout: Record<TextLayoutKey, TextLayoutItem> = {
+      headline: headline && typeof headline.x === "number" && typeof headline.y === "number"
+        ? { ...DEFAULT_LAYOUT.headline, xPct: headline.x / cw, yPct: headline.y / ch, fontSize: Number(headline.fontSize) || 48, color: (headline.color && String(headline.color).trim()) || "#ffffff" }
+        : { ...DEFAULT_LAYOUT.headline },
+      subheadline: subheadline && typeof subheadline.x === "number" && typeof subheadline.y === "number"
+        ? { ...DEFAULT_LAYOUT.subheadline, xPct: subheadline.x / cw, yPct: subheadline.y / ch, fontSize: Number(subheadline.fontSize) || 24, color: (subheadline.color && String(subheadline.color).trim()) || "#ffffff" }
+        : { ...DEFAULT_LAYOUT.subheadline },
+      cta: cta && typeof cta.x === "number" && typeof cta.y === "number"
+        ? {
+            ...DEFAULT_LAYOUT.cta,
+            xPct: cta.x / cw,
+            yPct: cta.y / ch,
+            widthPct: typeof cta.w === "number" ? cta.w / cw : 0.26,
+            heightPct: typeof cta.h === "number" ? cta.h / ch : 0.06,
+            fontSize: Number(cta.fontSize) || 20,
+            color: (cta.color && String(cta.color).trim()) || "#ffffff",
+            bgColor: (cta.bg && String(cta.bg).trim()) || "#2563eb",
+            borderRadius: typeof cta.radius === "number" ? cta.radius : 999,
+          }
+        : { ...DEFAULT_LAYOUT.cta },
+    };
+    setLayout(nextLayout);
+    initialLayoutRef.current = JSON.parse(JSON.stringify(nextLayout));
+  }, [composeState?.layers, composeState?.format, composeState?.resolution]);
 
   // Reset to step 1 on mount if no task context
   useEffect(() => {
@@ -426,37 +571,69 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
   };
 
 
-  // Direct fetch to NeoBot API for image generation
-  const neobotImageFetch = async (prompt: string, backendFormat: string) => {
-    const res = await fetch(`${NEOBOT_API_BASE}/api/marketing/background`, {
-      method: "POST",
-      credentials: "omit",
-      headers: {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "x-api-key": NEOBOT_API_KEY,
-      },
-      body: JSON.stringify({
-        prompt,
-        format: backendFormat,
-        style: getStyleLabel(),
-        purpose: purposeOptions.find(p => p.id === purpose)?.label || "Prodej",
-        color: colorOptions.find(c => c.id === color)?.label || "Neutrální",
-      }),
-    });
-
-    const body = await res.json().catch(() => null);
-    console.log("[Image Generate] status", res.status, "body", body);
-
-    if (!res.ok || !body || body.ok === false) {
-      let msg = (body && (body.message || body.error)) || "Generování obrázku se nezdařilo.";
-      if (res.status === 401 || res.status === 403) msg = "Chybí nebo je neplatný API klíč.";
-      if (res.status === 402) msg = "Došel kredit / units.";
-      if (res.status === 400) msg = body?.message || body?.error || "Chybný požadavek (chybí prompt?).";
+  // Visual mode: generate single background via /api/images/compose with backgroundOnly: true
+  const fetchVisualBackground = async (prompt: string) => {
+    const composeFormat = format === "portrait" || format === "story" ? "story" : format === "landscape" ? "landscape" : "square";
+    const styleMap: Record<string, string> = {
+      minimalist: "minimalisticky",
+      luxury: "luxusni",
+      playful: "hravy",
+      natural: "prirozeny",
+    };
+    const paletteMap: Record<string, string> = {
+      neutral: "neutralni",
+      warm: "teple",
+      cool: "studene",
+      vibrant: "vyrazne",
+    };
+    let data: any;
+    try {
+      data = await neobotFetch("/api/images/compose", {
+        method: "POST",
+        body: JSON.stringify({
+          type: "instagram_post",
+          format: composeFormat,
+          resolution: "standard",
+          style: styleMap[style] || "minimalisticky",
+          purpose: purpose,
+          palette: paletteMap[color] || "neutralni",
+          prompt: prompt.trim(),
+          brand: profile ? { name: profile.brand_name || undefined } : {},
+          backgroundOnly: true,
+          textLayout: "flyer",
+          textPlacement: "bottom_left",
+          clientProfile: profile
+            ? {
+                brandName: profile.brand_name || undefined,
+                industry: profile.business || undefined,
+                brandStyle: profile.brand_keywords || undefined,
+                style: profile.brand_keywords || undefined,
+                targetAudience: profile.ideal_customer || undefined,
+                uniqueValue: profile.unique_value || undefined,
+                inspirationBrands: profile.inspiration_brands || undefined,
+                marketingGoal: profile.marketing_goal || undefined,
+                industryLock: true,
+              }
+            : undefined,
+        }),
+      }) as any;
+    } catch (e: any) {
+      const msg = e?.responseData?.message || e?.message || "Generování obrázku se nezdařilo.";
+      console.error("[fetchVisualBackground] API error:", e?.status, e?.responseData, e?.message);
       throw new Error(msg);
     }
-
-    return body;
+    const bg = data?.background;
+    if (!bg?.url) {
+      const msg = data?.message || data?.error || "Server nevrátil obrázek (chybí background.url).";
+      console.error("[fetchVisualBackground] Unexpected response:", data);
+      throw new Error(msg);
+    }
+    return {
+      backgroundUrl: bg.url.startsWith("http") ? bg.url : `${NEOBOT_API_BASE}${bg.url}`,
+      width: bg.width,
+      height: bg.height,
+      prompt,
+    };
   };
 
   const handleGenerate = async () => {
@@ -505,6 +682,19 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
           backgroundOnly: false,
           textLayout,
           textPlacement,
+          clientProfile: profile
+            ? {
+                brandName: profile.brand_name || undefined,
+                industry: profile.business || undefined,
+                brandStyle: profile.brand_keywords || undefined,
+                style: profile.brand_keywords || undefined,
+                targetAudience: profile.ideal_customer || undefined,
+                uniqueValue: profile.unique_value || undefined,
+                inspirationBrands: profile.inspiration_brands || undefined,
+                marketingGoal: profile.marketing_goal || undefined,
+                industryLock: true,
+              }
+            : undefined,
         };
         const data = await neobotFetch("/api/images/compose", {
           method: "POST",
@@ -516,12 +706,15 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
         const compositeUrl = data?.composite?.url
           ? (String(data.composite.url).startsWith("http") ? data.composite.url : `${NEOBOT_API_BASE}${data.composite.url}`)
           : "";
+        const responseFormat = data?.format || composeFormat;
+        const resolution = data?.resolution || "standard";
         setComposeState({
           backgroundUrl: bgUrl,
           layers: Array.isArray(data?.layers) ? data.layers : [],
-          format: data?.format || composeFormat,
-          resolution: data?.resolution || "standard",
+          format: responseFormat,
+          resolution,
         });
+        setLastComposeMeta({ backgroundUrl: bgUrl, format: responseFormat, resolution });
         const texts = data?.texts || {};
         setDraftTexts({
           headline: texts.headline || "",
@@ -562,17 +755,14 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
       return;
     }
 
-    // Visual mode → call /api/marketing/background directly
+    // Visual mode → single background via /api/images/compose with backgroundOnly: true
     try {
-      const bgData = await neobotImageFetch(inputValue, backendFormat);
+      const bgData = await fetchVisualBackground(inputValue);
 
-      const bgUrl = bgData?.backgroundUrl || bgData?.imageUrl || bgData?.url;
-      const resolvedBgUrl = bgUrl
-        ? (bgUrl.startsWith("http") ? bgUrl : `${NEOBOT_API_BASE}${bgUrl}`)
-        : null;
+      const resolvedBgUrl = bgData.backgroundUrl || null;
 
       const sections = generateMockContent();
-      if (bgData?.prompt) {
+      if (bgData.prompt) {
         sections[0] = { id: "main-prompt", title: "Hlavní Prompt", content: bgData.prompt };
       }
 
@@ -586,31 +776,48 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
       });
       setCurrentStep("proposal");
     } catch (e: any) {
-      console.error("Background generation error:", e);
-      toast.error("Chyba: " + (e?.message || "Neznámá chyba"));
+      console.error("Background generation error:", e?.status, e?.responseData, e?.message);
+      const msg = e?.message || "Generování obrázku se nezdařilo. Zkontroluj konzoli (F12) a REPLICATE_API_TOKEN na serveru.";
+      toast.error("Chyba: " + msg);
     } finally {
       setIsGenerating(false);
     }
   };
 
+  const handleCancelEdits = () => {
+    const initial = initialLayoutRef.current;
+    if (initial) setLayout(JSON.parse(JSON.stringify(initial)));
+    setSelectedLayer(null);
+  };
+
   const handleUpdateLayout = async () => {
-    if (!composeState) return;
+    const meta = lastComposeMeta || composeState;
+    if (!meta?.backgroundUrl) return;
     setErrorRender(null);
     setLoadingRender(true);
     try {
-      const updatedLayers = composeState.layers.map((layer: any) => {
-        if (layer.type === "text" && layer.id === "headline") return { ...layer, text: draftTexts.headline };
-        if (layer.type === "text" && layer.id === "subheadline") return { ...layer, text: draftTexts.subheadline };
-        if (layer.type === "button" && layer.id === "cta") return { ...layer, text: draftTexts.cta };
-        return layer;
-      });
+      const h = layout.headline;
+      const s = layout.subheadline;
+      const c = layout.cta;
+      const layoutOverrides = {
+        headline: { xPct: h.xPct, yPct: h.yPct, fontSize: h.fontSize, color: h.color, useAutoContrast: h.useAutoContrast !== false },
+        subheadline: { xPct: s.xPct, yPct: s.yPct, fontSize: s.fontSize, color: s.color, useAutoContrast: s.useAutoContrast !== false },
+        cta: isCtaLayout(c)
+          ? { xPct: c.xPct, yPct: c.yPct, widthPct: c.widthPct, heightPct: c.heightPct, fontSize: c.fontSize, color: c.color, bgColor: c.bgColor || "#2563eb", borderRadius: typeof c.borderRadius === "number" ? c.borderRadius : 999, useAutoContrast: c.useAutoContrast !== false }
+          : { xPct: c.xPct, yPct: c.yPct, widthPct: 0.26, heightPct: 0.06, fontSize: c.fontSize, color: c.color, bgColor: "#2563eb", borderRadius: 999, useAutoContrast: c.useAutoContrast !== false },
+      };
       const data = await neobotFetch("/api/images/compose/render", {
         method: "POST",
         body: JSON.stringify({
-          backgroundUrl: composeState.backgroundUrl,
-          format: composeState.format,
-          resolution: composeState.resolution,
-          layers: updatedLayers,
+          backgroundUrl: meta.backgroundUrl,
+          format: meta.format,
+          resolution: meta.resolution,
+          headline: draftTexts.headline,
+          subheadline: draftTexts.subheadline,
+          cta: draftTexts.cta,
+          layout: layoutOverrides,
+          layoutOverrides,
+          autoContrast: true,
         }),
       }) as any;
       const compositeUrl = data?.composite?.url
@@ -763,55 +970,41 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
 
       {taskContext && <TaskContextBanner taskContext={taskContext} onNavigateBack={navigateBackToTask} />}
 
-      {/* STEP 1: Select visual type */}
+      {/* STEP 1: Select visual type – pouze výběr karet vlevo, bez prázdného panelu */}
       {currentStep === "select" && (
-        <div className="grid lg:grid-cols-5 gap-6">
-          <div className="lg:col-span-2 space-y-2">
-            <h2 className="font-semibold text-foreground mb-4">Co chceš vytvořit?</h2>
-            <div className="space-y-1">
-              {functionCategories.map((category) => (
-                <div key={category.id} className="glass rounded-lg overflow-hidden">
-                  <button
-                    onClick={() => toggleCategory(category.id)}
-                    className="w-full flex items-center justify-between p-3 hover:bg-muted/30 transition-colors"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-lg bg-accent/10 flex items-center justify-center">
-                        <category.icon className="w-4 h-4 text-accent" />
-                      </div>
-                      <span className="font-medium text-sm text-foreground">{category.title}</span>
+        <div className="max-w-xl">
+          <h2 className="font-semibold text-foreground mb-4">Co chceš vytvořit?</h2>
+          <div className="space-y-1">
+            {functionCategories.map((category) => (
+              <div key={category.id} className="glass rounded-lg overflow-hidden">
+                <button
+                  onClick={() => toggleCategory(category.id)}
+                  className="w-full flex items-center justify-between p-3 hover:bg-muted/30 transition-colors"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-accent/10 flex items-center justify-center">
+                      <category.icon className="w-4 h-4 text-accent" />
                     </div>
-                    <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform ${expandedCategory === category.id ? "rotate-180" : ""}`} />
-                  </button>
-                  {expandedCategory === category.id && (
-                    <div className="px-3 pb-3 space-y-1">
-                      {category.functions.map((func) => (
-                        <button
-                          key={func.id}
-                          onClick={() => handleFunctionSelect(func)}
-                          className="w-full text-left px-3 py-2 rounded-lg text-sm transition-all hover:bg-accent hover:text-accent-foreground text-muted-foreground"
-                        >
-                          <div className="font-medium">{func.label}</div>
-                          <div className="text-xs opacity-70">{func.description}</div>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="lg:col-span-3">
-            <div className="glass rounded-xl p-12 text-center">
-              <div className="w-16 h-16 rounded-xl bg-muted/50 flex items-center justify-center mx-auto mb-4">
-                <Image className="w-8 h-8 text-muted-foreground" />
+                    <span className="font-medium text-sm text-foreground">{category.title}</span>
+                  </div>
+                  <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform ${expandedCategory === category.id ? "rotate-180" : ""}`} />
+                </button>
+                {expandedCategory === category.id && (
+                  <div className="px-3 pb-3 space-y-1">
+                    {category.functions.map((func) => (
+                      <button
+                        key={func.id}
+                        onClick={() => handleFunctionSelect(func)}
+                        className="w-full text-left px-3 py-2 rounded-lg text-sm transition-all hover:bg-accent hover:text-accent-foreground text-muted-foreground"
+                      >
+                        <div className="font-medium">{func.label}</div>
+                        <div className="text-xs opacity-70">{func.description}</div>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
-              <h3 className="font-semibold text-foreground mb-2">Vyber typ vizuálu</h3>
-              <p className="text-sm text-muted-foreground">
-                Zvol z kategorií vlevo, jaký obrázek chceš vytvořit
-              </p>
-            </div>
+            ))}
           </div>
         </div>
       )}
@@ -924,93 +1117,65 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
               </div>
 
               {outputMode === "marketing" && (
-                <>
-                  <div className="space-y-2">
-                    <label className="text-sm text-muted-foreground">Kompozice textu</label>
-                    <select
-                      value={textLayout}
-                      onChange={e => setTextLayout(e.target.value as "flyer" | "balanced" | "visual")}
-                      className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
-                    >
-                      <option value="flyer">Leták (text dominuje)</option>
-                      <option value="balanced">Vyvážená</option>
-                      <option value="visual">Vizuál dominuje</option>
-                    </select>
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-sm text-muted-foreground">Umístění textu</label>
-                    <select
-                      value={textPlacement}
-                      onChange={e => setTextPlacement(e.target.value as "auto" | "bottom_left" | "bottom_center" | "top_left" | "top_center" | "center" | "right_panel")}
-                      className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
-                    >
-                      <option value="auto">Auto (podle obrázku)</option>
-                      <option value="bottom_left">Dole vlevo</option>
-                      <option value="bottom_center">Dole na středu</option>
-                      <option value="top_left">Nahoře vlevo</option>
-                      <option value="top_center">Nahoře na středu</option>
-                      <option value="center">Na středu</option>
-                      <option value="right_panel">Vpravo (panel)</option>
-                    </select>
-                  </div>
-                </>
+                <div className="space-y-2">
+                  <button
+                    type="button"
+                    onClick={() => setAdvancedOpen((o) => !o)}
+                    className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
+                  >
+                    <ChevronDown className={`w-4 h-4 transition-transform ${advancedOpen ? "rotate-180" : ""}`} />
+                    Pokročilé (kompozice a umístění textu)
+                  </button>
+                  {advancedOpen && (
+                    <>
+                      <div className="space-y-2 pl-6">
+                        <label className="text-sm text-muted-foreground">Kompozice textu</label>
+                        <select
+                          value={textLayout}
+                          onChange={e => setTextLayout(e.target.value as "auto" | "flyer" | "balanced" | "visual")}
+                          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+                        >
+                          <option value="auto">Auto (AI podle obrázku)</option>
+                          <option value="flyer">Leták (text dominuje)</option>
+                          <option value="balanced">Vyvážená</option>
+                          <option value="visual">Vizuál dominuje</option>
+                        </select>
+                      </div>
+                      <div className="space-y-2 pl-6">
+                        <label className="text-sm text-muted-foreground">Umístění textu</label>
+                        <select
+                          value={textPlacement}
+                          onChange={e => setTextPlacement(e.target.value as "auto" | "bottom_left" | "bottom_center" | "top_left" | "top_center" | "center" | "right_panel")}
+                          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+                        >
+                          <option value="auto">Auto (podle obrázku)</option>
+                          <option value="bottom_left">Dole vlevo</option>
+                          <option value="bottom_center">Dole na středu</option>
+                          <option value="top_left">Nahoře vlevo</option>
+                          <option value="top_center">Nahoře na středu</option>
+                          <option value="center">Na středu</option>
+                          <option value="right_panel">Vpravo (panel)</option>
+                        </select>
+                      </div>
+                    </>
+                  )}
+                </div>
               )}
             </div>
 
-            {/* Marketing mode: one main field + optional collapsible */}
+            {/* Marketing mode: jeden hlavní prompt */}
             {outputMode === "marketing" && (
               <div className="space-y-4 border-t border-border/50 pt-4">
-                <h4 className="font-semibold text-foreground flex items-center gap-2">
-                  <LayoutTemplate className="w-4 h-4 text-accent" />
-                  Konzultační zadání pro grafiku
-                </h4>
                 <div className="space-y-1">
-                  <label className="text-sm font-medium text-foreground block">Co chcete vytvořit?</label>
+                  <label className="text-sm font-medium text-foreground block">Zadání pro grafiku</label>
                   <Textarea
-                    placeholder="Např.: Jarní kolekce dámské módy, fashion butik — nebo: moderní interiér obýváku"
+                    placeholder="Např.: Jarní kolekce dámské módy, fashion butik — nebo: moderní interiér obýváku, kovové zahradní vrátky s povrchovou úpravou"
                     value={mainBrief}
                     onChange={e => setMainBrief(e.target.value)}
-                    className="min-h-[70px] bg-background/50"
+                    className="min-h-[100px] bg-background/50"
                   />
-                  <p className="text-xs text-muted-foreground">Povinné pole; podle něj se vygeneruje pozadí i texty.</p>
+                  <p className="text-xs text-muted-foreground">Podle tohoto textu se vygeneruje pozadí i texty grafiky.</p>
                 </div>
-                <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
-                  <CollapsibleTrigger asChild>
-                    <button type="button" className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors">
-                      <ChevronDown className={`w-4 h-4 transition-transform ${advancedOpen ? "rotate-180" : ""}`} />
-                      Pokročilé upřesnění (volitelné)
-                    </button>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent>
-                    <div className="grid gap-4 pt-4 pl-6 border-l-2 border-border/50">
-                      <div className="space-y-1">
-                        <label className="text-sm font-medium text-foreground block">Kontext / téma</label>
-                        <Input
-                          placeholder="Např.: Zahradní branka, wellness balíček, sezónní menu"
-                          value={topic}
-                          onChange={e => setTopic(e.target.value)}
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-sm font-medium text-foreground block">Klíčová slova (oddělená čárkou)</label>
-                        <Input
-                          placeholder="Např.: kvalita, akce, novinka, doprava zdarma"
-                          value={keywords}
-                          onChange={e => setKeywords(e.target.value)}
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-sm font-medium text-foreground block">Popis produktu</label>
-                        <Textarea
-                          placeholder="Např.: Kovové zahradní vrátky s povrchovou úpravou, odolné vůči povětrnostním podmínkám"
-                          value={offer}
-                          onChange={e => setOffer(e.target.value)}
-                          className="min-h-[70px] bg-background/50"
-                        />
-                      </div>
-                    </div>
-                  </CollapsibleContent>
-                </Collapsible>
                 <Button
                   onClick={handleGenerate}
                   disabled={!mainBrief.trim() || isGenerating}
@@ -1073,7 +1238,10 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
 
       {/* STEP 3: Proposal (Editable) */}
       {currentStep === "proposal" && imageOutput && (
-        <div className="max-w-3xl mx-auto space-y-6">
+        <div className={`space-y-6 ${outputMode === "marketing" && composeState ? "max-w-[1400px] mx-auto" : "max-w-3xl mx-auto"}`}>
+          <div style={{ position: "fixed", top: 10, left: 10, zIndex: 9999, background: "red", color: "white", padding: "6px 10px", borderRadius: "8px" }}>
+            UI_STEP3_PATCH_ACTIVE
+          </div>
           <div className="flex items-center justify-between">
             <div>
               <h3 className="font-display text-xl font-bold text-foreground">{imageOutput.name}</h3>
@@ -1096,60 +1264,176 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
             </div>
           </div>
 
-          {/* Image Preview: Konva drag editor (marketing) or static image */}
-          <div className="glass rounded-xl p-8 text-center">
-            {outputMode === "marketing" && composeState?.backgroundUrl && backgroundImage && Array.isArray(composeState.layers) && composeState.layers.some((l: any) => (l.type === "text" || l.type === "button") && typeof l.x === "number" && typeof l.y === "number") ? (
-              <div className="relative inline-block w-full max-w-md mx-auto">
-                <ComposeCanvas
-                  composeState={composeState}
-                  draftTexts={draftTexts}
-                  backgroundImage={backgroundImage}
-                  onLayerDragEnd={updateLayerPosition}
-                />
+          {/* Marketing: grid = preview (left) + inspector panel (right). Visual: single column. */}
+          {outputMode === "marketing" && composeState?.backgroundUrl ? (
+            <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-6 items-start">
+              {/* Left: preview – fixní výška, celý obrázek vidět bez scrollu */}
+              <div
+                ref={previewContainerRef}
+                className="relative rounded-2xl border border-white/10 bg-white/5 h-[calc(100vh-260px)] min-h-[520px] overflow-hidden flex items-center justify-center"
+              >
+                {editMode && Array.isArray(composeState.layers) && composeState.layers.some((l: any) => (l.type === "text" || l.type === "button") && typeof l.x === "number") ? (
+                  <ComposeEditor
+                    composeState={composeState}
+                    draftTexts={draftTexts}
+                    backgroundImageUrl={composeState.backgroundUrl.startsWith("http") ? composeState.backgroundUrl : `${NEOBOT_API_BASE}${composeState.backgroundUrl}`}
+                    layout={layout}
+                    setLayout={setLayout}
+                    selectedLayer={selectedLayer}
+                    onSelectLayer={setSelectedLayer}
+                    scale={1}
+                    fillContainer
+                    containerRef={previewContainerRef}
+                    aspectRatio={getCanvasDimensions(composeState.format, composeState.resolution).width / getCanvasDimensions(composeState.format, composeState.resolution).height}
+                  />
+                ) : (
+                  <img
+                    src={imageOutput.imageUrl || (composeState.backgroundUrl.startsWith("http") ? composeState.backgroundUrl : `${NEOBOT_API_BASE}${composeState.backgroundUrl}`)}
+                    alt="Návrh"
+                    className="w-full h-full object-contain"
+                  />
+                )}
                 {loadingRender && (
-                  <div className="absolute inset-0 rounded-lg bg-black/50 flex items-center justify-center pointer-events-none">
+                  <div className="absolute inset-0 bg-black/50 flex items-center justify-center pointer-events-none">
                     <Loader2 className="w-10 h-10 text-white animate-spin" />
                     <span className="ml-2 text-white text-sm">Aktualizuji layout…</span>
                   </div>
                 )}
-                {imageOutput?.logoUrl && (
-                  <div className="absolute top-3 right-3 w-14 h-14 rounded-lg bg-background/90 shadow-md flex items-center justify-center overflow-hidden pointer-events-none">
-                    <img src={imageOutput.logoUrl} alt="Logo" className="max-w-full max-h-full object-contain" />
-                  </div>
-                )}
               </div>
-            ) : imageOutput?.imageUrl ? (
-              <div className="relative inline-block w-full max-w-md mx-auto">
-                <img src={imageOutput.imageUrl} alt="Náhled vizuálu" className="w-full rounded-lg object-contain" />
-                {loadingRender && (
-                  <div className="absolute inset-0 rounded-lg bg-black/50 flex items-center justify-center">
-                    <Loader2 className="w-10 h-10 text-white animate-spin" />
-                    <span className="ml-2 text-white text-sm">Aktualizuji layout…</span>
+
+              {/* Right: editor panel – sticky, scrollovatelný */}
+              <div className="sticky top-24 h-[calc(100vh-260px)] overflow-y-auto rounded-2xl border border-white/10 bg-white/5 p-4 flex flex-col">
+                <div className="space-y-4 pb-4">
+                  {composeState && (
+                    <Button
+                      variant={editMode ? "secondary" : "outline"}
+                      size="sm"
+                      className="w-full"
+                      onClick={() => setEditMode((v) => !v)}
+                    >
+                      <LayoutTemplate className="w-4 h-4 mr-1" />
+                      {editMode ? "Skrýt editor" : "Upravit design"}
+                    </Button>
+                  )}
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-semibold text-foreground">Texty grafiky</h4>
+                    {composeState && (
+                      <Button variant="outline" size="sm" onClick={() => handleGenerate()} disabled={loadingCompose}>
+                        <Wand2 className={`w-4 h-4 mr-1 ${loadingCompose ? "animate-spin" : ""}`} />
+                        Přepsat od AI
+                      </Button>
+                    )}
                   </div>
-                )}
-                {outputMode === "marketing" && imageOutput.logoUrl && (
-                  <div className="absolute top-3 right-3 w-14 h-14 rounded-lg bg-background/90 shadow-md flex items-center justify-center overflow-hidden">
-                    <img src={imageOutput.logoUrl} alt="Logo" className="max-w-full max-h-full object-contain" />
+                  <div className="space-y-2">
+                    <Label className="text-foreground">Vybraný prvek</Label>
+                    <div className="flex gap-2 flex-wrap">
+                      <Button type="button" variant={selectedLayer === "headline" ? "default" : "outline"} size="sm" onClick={() => setSelectedLayer(selectedLayer === "headline" ? null : "headline")}>Nadpis</Button>
+                      <Button type="button" variant={selectedLayer === "subheadline" ? "default" : "outline"} size="sm" onClick={() => setSelectedLayer(selectedLayer === "subheadline" ? null : "subheadline")}>Podnadpis</Button>
+                      <Button type="button" variant={selectedLayer === "cta" ? "default" : "outline"} size="sm" onClick={() => setSelectedLayer(selectedLayer === "cta" ? null : "cta")}>CTA</Button>
+                    </div>
                   </div>
-                )}
-              </div>
-            ) : isGenerating || loadingCompose ? (
-              <div className="w-full aspect-square max-w-md mx-auto rounded-lg bg-muted/50 flex items-center justify-center">
-                <div className="text-center">
-                  <Loader2 className="w-10 h-10 text-primary mx-auto mb-2 animate-spin" />
-                  <p className="text-sm text-muted-foreground">Generuji obrázek…</p>
+                  {selectedLayer && (
+                    <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-4">
+                      <h5 className="text-sm font-medium text-foreground">Upravit: {selectedLayer === "headline" ? "Nadpis" : selectedLayer === "subheadline" ? "Podnadpis" : "CTA"}</h5>
+                      <div className="space-y-2">
+                        <Label>Velikost písma</Label>
+                        <Slider value={[layout[selectedLayer].fontSize]} onValueChange={([v]) => setLayout((prev) => ({ ...prev, [selectedLayer]: { ...prev[selectedLayer], fontSize: v ?? prev[selectedLayer].fontSize } }))} min={12} max={selectedLayer === "cta" ? 24 : 72} step={2} />
+                        <span className="text-xs text-muted-foreground">{layout[selectedLayer].fontSize}px</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <Label>Automatický kontrast</Label>
+                        <button type="button" role="switch" aria-checked={layout[selectedLayer].useAutoContrast !== false} onClick={() => setLayout((prev) => ({ ...prev, [selectedLayer]: { ...prev[selectedLayer], useAutoContrast: !(prev[selectedLayer].useAutoContrast !== false) } }))} className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${(layout[selectedLayer].useAutoContrast !== false) ? "bg-primary" : "bg-muted"}`}>
+                          <span className={`pointer-events-none block h-5 w-5 rounded-full bg-background shadow ring-0 transition-transform ${(layout[selectedLayer].useAutoContrast !== false) ? "translate-x-5" : "translate-x-0.5"}`} style={{ marginTop: 2 }} />
+                        </button>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Barva textu</Label>
+                        <div className="flex items-center gap-2">
+                          <input type="color" value={layout[selectedLayer].color} onChange={(e) => setLayout((prev) => ({ ...prev, [selectedLayer]: { ...prev[selectedLayer], color: e.target.value } }))} className="w-10 h-10 rounded border border-border cursor-pointer bg-transparent" disabled={layout[selectedLayer].useAutoContrast !== false} />
+                          <Input value={layout[selectedLayer].color} onChange={(e) => setLayout((prev) => ({ ...prev, [selectedLayer]: { ...prev[selectedLayer], color: e.target.value || "#ffffff" } }))} className="flex-1 font-mono text-sm bg-background/50" disabled={layout[selectedLayer].useAutoContrast !== false} />
+                        </div>
+                      </div>
+                      {selectedLayer === "cta" && isCtaLayout(layout.cta) && (
+                        <>
+                          <div className="space-y-2">
+                            <Label>Barva pozadí CTA</Label>
+                            <div className="flex items-center gap-2">
+                              <input type="color" value={layout.cta.bgColor && /^#[0-9a-fA-F]{3,8}$/.test(layout.cta.bgColor) ? layout.cta.bgColor : "#2563eb"} onChange={(e) => setLayout((prev) => ({ ...prev, cta: { ...prev.cta, bgColor: e.target.value } }))} className="w-10 h-10 rounded border border-border cursor-pointer bg-transparent" />
+                              <Input value={layout.cta.bgColor || "#2563eb"} onChange={(e) => setLayout((prev) => ({ ...prev, cta: { ...prev.cta, bgColor: e.target.value || "#2563eb" } }))} className="flex-1 font-mono text-sm bg-background/50" />
+                            </div>
+                          </div>
+                          <div className="space-y-2">
+                            <Label>Zaoblení rohů</Label>
+                            <Slider value={[typeof layout.cta.borderRadius === "number" ? layout.cta.borderRadius : 999]} onValueChange={([v]) => setLayout((prev) => ({ ...prev, cta: { ...prev.cta, borderRadius: v ?? 999 } }))} min={0} max={999} step={4} />
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+                  <div className="space-y-1">
+                    <label className="text-sm font-medium text-foreground">Nadpis</label>
+                    <Input value={draftTexts.headline} onChange={e => setDraftTexts(prev => ({ ...prev, headline: e.target.value }))} className="bg-background/50" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-sm font-medium text-foreground">Podnadpis</label>
+                    <Input value={draftTexts.subheadline} onChange={e => setDraftTexts(prev => ({ ...prev, subheadline: e.target.value }))} className="bg-background/50" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-sm font-medium text-foreground">CTA</label>
+                    <Input value={draftTexts.cta} onChange={e => setDraftTexts(prev => ({ ...prev, cta: e.target.value }))} className="bg-background/50" />
+                  </div>
+                </div>
+                <div className="sticky bottom-0 pt-3 bg-gradient-to-t from-black/70 to-transparent space-y-2">
+                  <Button className="w-full" onClick={handleUpdateLayout} disabled={loadingRender || !composeState}>
+                    {loadingRender ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Aktualizuji…</> : "Použít změny"}
+                  </Button>
+                  <Button variant="outline" className="w-full" onClick={handleCancelEdits}>
+                    Zrušit úpravy
+                  </Button>
                 </div>
               </div>
-            ) : (
-              <div className="w-full aspect-square max-w-md mx-auto rounded-lg bg-muted/50 flex items-center justify-center">
+            </div>
+          ) : outputMode === "marketing" ? (
+            <div className="glass rounded-xl p-8 text-center">
+              {imageOutput?.imageUrl ? (
+                <div className="relative inline-block w-full max-w-md mx-auto">
+                  <img src={imageOutput.imageUrl} alt="Návrh" className="w-full rounded-lg object-contain max-h-[70vh]" />
+                  {loadingRender && (
+                    <div className="absolute inset-0 rounded-lg bg-black/50 flex items-center justify-center">
+                      <Loader2 className="w-10 h-10 text-white animate-spin" />
+                      <span className="ml-2 text-white text-sm">Aktualizuji layout…</span>
+                    </div>
+                  )}
+                </div>
+              ) : isGenerating || loadingCompose ? (
+                <div className="w-full aspect-square max-w-md mx-auto rounded-lg bg-muted/50 flex items-center justify-center">
+                  <Loader2 className="w-10 h-10 text-primary animate-spin" />
+                  <p className="text-sm text-muted-foreground mt-2">Generuji obrázek…</p>
+                </div>
+              ) : (
                 <Button onClick={() => handleGenerate()} variant="outline">
                   <Image className="w-4 h-4 mr-2" />Vygenerovat obrázek
                 </Button>
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          ) : (
+            <div className="glass rounded-xl p-8 text-center">
+              {imageOutput?.imageUrl ? (
+                <img src={imageOutput.imageUrl} alt="Návrh" className="w-full max-w-md mx-auto rounded-lg object-contain max-h-[70vh]" />
+              ) : isGenerating || loadingCompose ? (
+                <div className="w-full aspect-square max-w-md mx-auto rounded-lg bg-muted/50 flex items-center justify-center">
+                  <Loader2 className="w-10 h-10 text-primary animate-spin" />
+                  <p className="text-sm text-muted-foreground mt-2">Generuji obrázek…</p>
+                </div>
+              ) : (
+                <Button onClick={() => handleGenerate()} variant="outline">
+                  <Image className="w-4 h-4 mr-2" />Vygenerovat obrázek
+                </Button>
+              )}
+            </div>
+          )}
 
-          {/* Content Sections */}
+          {/* Content Sections: errors + debug (marketing); sections for visual */}
           {outputMode === "marketing" ? (
             <div className="space-y-4">
               {(errorCompose || errorRender) && (
@@ -1163,38 +1447,6 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
                   compose calls: /api/images/compose · render calls: /api/images/compose/render
                 </p>
               )}
-              <div className="flex items-center justify-between">
-                <h4 className="font-semibold text-foreground">Texty grafiky</h4>
-                {composeState && (
-                  <Button variant="outline" size="sm" onClick={() => handleGenerate()} disabled={loadingCompose}>
-                    <Wand2 className={`w-4 h-4 mr-1 ${loadingCompose ? "animate-spin" : ""}`} />
-                    Přepsat texty od AI
-                  </Button>
-                )}
-              </div>
-              <div className="glass rounded-xl p-5 space-y-4">
-                <div className="space-y-1">
-                  <label className="text-sm font-medium text-foreground">Nadpis (headline)</label>
-                  <Input value={draftTexts.headline} onChange={e => setDraftTexts(prev => ({ ...prev, headline: e.target.value }))} className="bg-background/50" />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-sm font-medium text-foreground">Podnadpis (subheadline)</label>
-                  <Input value={draftTexts.subheadline} onChange={e => setDraftTexts(prev => ({ ...prev, subheadline: e.target.value }))} className="bg-background/50" />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-sm font-medium text-foreground">Výzva k akci (CTA)</label>
-                  <Input value={draftTexts.cta} onChange={e => setDraftTexts(prev => ({ ...prev, cta: e.target.value }))} className="bg-background/50" />
-                </div>
-                {composeState && (
-                  <Button
-                    onClick={handleUpdateLayout}
-                    disabled={loadingRender || !composeState}
-                    className="w-full sm:w-auto"
-                  >
-                    {loadingRender ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Aktualizuji…</> : "Aktualizovat layout"}
-                  </Button>
-                )}
-              </div>
             </div>
           ) : (
             <div className="space-y-4">

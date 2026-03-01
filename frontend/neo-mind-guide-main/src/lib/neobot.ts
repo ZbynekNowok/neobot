@@ -1,6 +1,6 @@
 export const NEOBOT_API_BASE =
   (typeof import.meta !== "undefined" && (import.meta.env?.VITE_NEOBOT_API_BASE as string)?.trim()) ||
-  "https://api.neobot.cz";
+  (typeof window !== "undefined" ? "" : "https://api.neobot.cz");
 export const NEOBOT_API_KEY = import.meta.env.VITE_NEOBOT_API_KEY || "";
 
 const apiHeaders = (): HeadersInit => ({

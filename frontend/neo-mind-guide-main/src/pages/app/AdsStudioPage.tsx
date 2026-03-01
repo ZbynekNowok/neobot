@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { useOutletContext } from "react-router-dom";
+import { UserProfile } from "@/components/app/AppLayout";
 import { Megaphone, Loader2, Copy, ImageIcon, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -58,7 +60,24 @@ type Status = "idle" | "loading" | "error" | "success";
 type ImageStatus = "idle" | "loading" | "error" | "success";
 type Resolution = "preview" | "standard" | "high";
 
+function buildClientProfile(profile: UserProfile | null) {
+  return profile
+    ? {
+        brandName: profile.brand_name || undefined,
+        industry: profile.business || undefined,
+        brandStyle: profile.brand_keywords || undefined,
+        style: profile.brand_keywords || undefined,
+        targetAudience: profile.ideal_customer || undefined,
+        uniqueValue: profile.unique_value || undefined,
+        inspirationBrands: profile.inspiration_brands || undefined,
+        marketingGoal: profile.marketing_goal || undefined,
+        industryLock: true,
+      }
+    : undefined;
+}
+
 export default function AdsStudioPage() {
+  const { profile } = useOutletContext<{ profile: UserProfile | null }>();
   const [url, setUrl] = useState("");
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -151,6 +170,8 @@ export default function AdsStudioPage() {
     form.append("style", productStyle);
     form.append("resolution", resolution);
     if (productName.trim()) form.append("productName", productName.trim());
+    const clientProfile = buildClientProfile(profile);
+    if (clientProfile) form.append("clientProfile", JSON.stringify(clientProfile));
     try {
       const res = await fetch(`${NEOBOT_API_BASE}/api/ads/product-variants`, {
         method: "POST",
@@ -205,7 +226,13 @@ export default function AdsStudioPage() {
     try {
       const data = await neobotFetch("/api/ads/images", {
         method: "POST",
-        body: JSON.stringify({ url: u, count: imageCount, format: imageFormat, resolution }),
+        body: JSON.stringify({
+          url: u,
+          count: imageCount,
+          format: imageFormat,
+          resolution,
+          clientProfile: buildClientProfile(profile),
+        }),
       });
       if (!data?.ok || !Array.isArray(data?.images)) {
         throw new Error(data?.message || data?.error || "Nepodařilo se vygenerovat obrázky");
