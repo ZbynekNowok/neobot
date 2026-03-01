@@ -1,8 +1,19 @@
 node_modules
-.env
 logs
 *.log
 data
 neobot.db
 neobot.db-wal
 neobot.db-shm
+
+# Environment files
+.env
+.env.*
+*.env
+frontend/**/.env
+backend/**/.env
+
+# Prevent accidental secrets
+.env.local
+.env.production
+.env.development
