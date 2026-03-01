@@ -8,12 +8,14 @@
 const GLOBAL_POSITIVE_BASE = [
   "commercial advertising photo, high-end, sharp, crisp, professional lighting",
   "single scene, one hero subject, no collage, no grid, no tiled layout",
+  "single image, single frame, one scene, no panels, no split layout",
   "NO TEXT, NO LOGOS, NO WATERMARKS, NO UI, NO WEBSITE SCREENSHOT",
   "leave clean copy-space areas (top/bottom/side), low clutter",
 ].join(", ");
 
 const GLOBAL_NEGATIVE_BASE = [
   "text, letters, typography, watermark, logo, caption",
+  "collage, montage, split screen, diptych, triptych, two panels, double image, grid, tiled, side by side, before and after, comic panel, multiple frames",
   "collage, grid, tiled layout, lineup, catalog sheet, product sheet, multiple products, repeated objects",
   "website screenshot, webpage, UI, interface, browser, menu, header, footer, paragraph text, lorem ipsum",
   "blurry, soft focus, motion blur, low detail, out of focus",

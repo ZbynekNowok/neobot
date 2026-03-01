@@ -179,29 +179,32 @@ function validateAndNormalizeLayers(layers, canvasWidth, canvasHeight) {
       }
       const text = String(raw.text || "").trim().slice(0, 32);
 
-      let x = Number(raw.x || 80);
-      let y = Number(raw.y || canvasHeight * 0.8);
+      let x = Number(raw.x ?? 80);
+      let y = Number(raw.y ?? canvasHeight * 0.8);
       if (!Number.isFinite(x)) x = 80;
       if (!Number.isFinite(y)) y = canvasHeight * 0.8;
 
-      let w = Number(raw.w || 260);
-      let h = Number(raw.h || 56);
-      if (!Number.isFinite(w)) w = 260;
-      if (!Number.isFinite(h)) h = 56;
-      w = Math.min(900, Math.max(120, w));
-      h = Math.min(220, Math.max(40, h));
+      let width = Number(raw.width ?? raw.w ?? 260);
+      let height = Number(raw.height ?? raw.h ?? 56);
+      if (!Number.isFinite(width)) width = 260;
+      if (!Number.isFinite(height)) height = 56;
+      width = Math.min(900, Math.max(120, width));
+      height = Math.min(220, Math.max(40, height));
 
-      if (x + w > canvasWidth) x = canvasWidth - w - 16;
-      if (y + h > canvasHeight) y = canvasHeight - h - 16;
+      if (x + width > canvasWidth) x = canvasWidth - width - 16;
+      if (y + height > canvasHeight) y = canvasHeight - height - 16;
       if (x < 0) x = 0;
       if (y < 0) y = 0;
 
-      const bg = isHexColor(raw.bg) ? raw.bg : "#2563eb";
+      const backgroundColor = isHexColor(raw.backgroundColor) ? raw.backgroundColor : (isHexColor(raw.bg) ? raw.bg : "#2563eb");
       const useAutoContrast = raw.useAutoContrast === true || raw.useAutoContrast === "true";
-      const color = useAutoContrast ? "" : (isHexColor(raw.color) ? raw.color : "#ffffff");
-      let radius = Number(raw.radius ?? 999);
-      if (!Number.isFinite(radius)) radius = 999;
-      radius = Math.min(999, Math.max(0, radius));
+      const textColor = useAutoContrast ? "" : (isHexColor(raw.textColor) ? raw.textColor : (isHexColor(raw.color) ? raw.color : "#ffffff"));
+      let borderRadius = Number(raw.borderRadius ?? raw.radius ?? 999);
+      if (!Number.isFinite(borderRadius)) borderRadius = 999;
+      borderRadius = Math.min(999, Math.max(0, borderRadius));
+      let fontSize = Number(raw.fontSize);
+      if (!Number.isFinite(fontSize)) fontSize = Math.min(32, Math.floor(height * 0.5));
+      fontSize = Math.min(96, Math.max(10, fontSize));
 
       safeLayers.push({
         type: "button",
@@ -209,11 +212,12 @@ function validateAndNormalizeLayers(layers, canvasWidth, canvasHeight) {
         text,
         x,
         y,
-        w,
-        h,
-        bg,
-        color,
-        radius,
+        width,
+        height,
+        fontSize,
+        backgroundColor,
+        textColor,
+        borderRadius,
       });
     }
   }
@@ -277,6 +281,7 @@ imagesRouter.post("/images/compose", async (req, res) => {
         textPlacement,
         clientProfile: body.clientProfile && typeof body.clientProfile === "object" ? body.clientProfile : undefined,
         requestId: req.id || contextPack.traceId,
+        stylePreset: body.stylePreset && String(body.stylePreset).trim() ? String(body.stylePreset).trim() : undefined,
       },
       debug: debugEnabled,
     });
@@ -369,12 +374,13 @@ function buildLayersFromLayout(layout, headline, subheadline, cta, canvasWidth, 
       text: String(cta ?? "").trim().slice(0, 32),
       x: Math.round(c.xPct * canvasWidth),
       y: Math.round(c.yPct * canvasHeight),
-      w: Math.round(c.widthPct * canvasWidth),
-      h: Math.round(c.heightPct * canvasHeight),
-      bg: isHexColor(c.bgColor) ? c.bgColor : "#2563eb",
-      color: c.useAutoContrast ? "" : (c.color || "#ffffff"),
+      width: Math.round(c.widthPct * canvasWidth),
+      height: Math.round(c.heightPct * canvasHeight),
+      fontSize: Math.min(96, Math.max(10, Number(c.fontSize) || 20)),
+      backgroundColor: isHexColor(c.bgColor) ? c.bgColor : "#2563eb",
+      textColor: c.useAutoContrast ? "" : (c.color || "#ffffff"),
       useAutoContrast: !!c.useAutoContrast,
-      radius: Math.min(999, Math.max(0, Number(c.radius ?? c.borderRadius ?? 999))),
+      borderRadius: Math.min(999, Math.max(0, Number(c.borderRadius ?? c.radius ?? 999))),
     });
   }
   return layers;
@@ -412,7 +418,7 @@ imagesRouter.post("/images/compose/render", async (req, res) => {
     });
   }
 
-  if (layout && typeof layout === "object" && (layout.headline || layout.subheadline || layout.cta)) {
+  if (!Array.isArray(layers) && layout && typeof layout === "object" && (layout.headline || layout.subheadline || layout.cta)) {
     const textLayers = buildLayersFromLayout(
       layout,
       body.headline,
@@ -461,13 +467,17 @@ imagesRouter.post("/images/compose/render", async (req, res) => {
       req.id || `compose-${Date.now()}`
     );
 
-    return res.json({
+    const json = {
       ok: true,
       composite: result.composite,
       layers: result.layers,
       format: result.format,
       resolution: result.resolution,
-    });
+    };
+    if (req.query?.debug === "1") {
+      json._debug = { layersUsed: safeLayers };
+    }
+    return res.json(json);
   } catch (err) {
     console.error("[POST /api/images/compose/render]", err);
     return res.status(500).json({

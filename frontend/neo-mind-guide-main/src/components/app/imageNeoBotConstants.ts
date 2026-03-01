@@ -111,3 +111,13 @@ export const colorOptions = [
   { id: "cool", label: "Studené" },
   { id: "vibrant", label: "Výrazné" },
 ];
+
+/** Style preset for image generation (SD-style): affects global prompt block. */
+export const stylePresetOptions = [
+  { id: "auto", label: "Auto" },
+  { id: "photographic", label: "Fotografický" },
+  { id: "realistic", label: "Realistický" },
+  { id: "cinematic", label: "Filmový" },
+  { id: "animation", label: "Animace" },
+  { id: "design", label: "Design" },
+];

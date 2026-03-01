@@ -155,6 +155,7 @@ function drawTextLayer(ctx, layer, width, height) {
 
   const fontSize = clamp(Number(layer.fontSize || 40), 12, 140);
   const fontWeight = clamp(Number(layer.fontWeight || 600), 300, 900);
+  const fontFamily = typeof layer.fontFamily === "string" && layer.fontFamily.trim() ? layer.fontFamily.trim() : "Inter, sans-serif";
   const align = ["left", "center", "right"].includes(layer.align) ? layer.align : "left";
   const maxWidthPct = clamp(Number(layer.maxWidthPct || 0.8), 0.3, 0.95);
   const maxWidth = width * maxWidthPct;
@@ -176,7 +177,7 @@ function drawTextLayer(ctx, layer, width, height) {
   y = clamp(y, 0, height);
 
   ctx.save();
-  ctx.font = `${fontWeight} ${fontSize}px Inter, sans-serif`;
+  ctx.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
   ctx.textAlign = align;
   ctx.textBaseline = "alphabetic";
 
@@ -263,12 +264,13 @@ function drawButtonLayer(ctx, layer, width, height) {
   }
   x = clamp(x, 0, width);
   y = clamp(y, 0, height);
-  const w = clamp(Number(layer.w || 260), 120, Math.min(900, width));
-  const h = clamp(Number(layer.h || 56), 40, Math.min(220, height));
-  const radius = clamp(Number(layer.radius ?? 999), 0, 999);
+  const w = clamp(Number(layer.width ?? layer.w ?? 260), 120, Math.min(900, width));
+  const h = clamp(Number(layer.height ?? layer.h ?? 56), 40, Math.min(220, height));
+  const radius = clamp(Number(layer.borderRadius ?? layer.radius ?? 999), 0, 999);
 
-  const bg = typeof layer.bg === "string" && layer.bg.trim() ? layer.bg.trim() : "#2563eb";
-  const color = typeof layer.color === "string" && layer.color.trim() ? layer.color.trim() : "#ffffff";
+  const bg = typeof (layer.backgroundColor ?? layer.bg) === "string" && String(layer.backgroundColor ?? layer.bg).trim() ? String(layer.backgroundColor ?? layer.bg).trim() : "#2563eb";
+  const color = typeof (layer.textColor ?? layer.color) === "string" && String(layer.textColor ?? layer.color).trim() ? String(layer.textColor ?? layer.color).trim() : "#ffffff";
+  const fontSize = clamp(Number(layer.fontSize || 0), 10, 96) || Math.min(32, Math.floor(h * 0.5));
 
   if (x + w > width) x = width - w - 16;
   if (y + h > height) y = height - h - 16;
@@ -296,7 +298,7 @@ function drawButtonLayer(ctx, layer, width, height) {
   ctx.fill();
 
   ctx.shadowColor = "transparent";
-  ctx.font = `600 ${Math.min(32, h * 0.5)}px Inter, sans-serif`;
+  ctx.font = `600 ${fontSize}px Inter, sans-serif`;
   ctx.fillStyle = color;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";

@@ -27,6 +27,7 @@ import {
   formatOptions,
   purposeOptions,
   colorOptions,
+  stylePresetOptions,
   type ImageFunction,
   type FunctionCategory,
 } from "./imageNeoBotConstants";
@@ -169,19 +170,21 @@ function ComposeCanvas({
               );
             }
             if (layer.type === "button") {
-              const w = Number(layer.w) || 280;
-              const h = Number(layer.h) || 64;
-              const bg = (layer.bg && String(layer.bg).trim()) || "#2563eb";
-              const color = (layer.color && String(layer.color).trim()) || "#ffffff";
+              const w = Number(layer.width ?? layer.w) || 280;
+              const h = Number(layer.height ?? layer.h) || 64;
+              const bg = (layer.backgroundColor ?? layer.bg) && String(layer.backgroundColor ?? layer.bg).trim() ? String(layer.backgroundColor ?? layer.bg).trim() : "#2563eb";
+              const color = (layer.textColor ?? layer.color) && String(layer.textColor ?? layer.color).trim() ? String(layer.textColor ?? layer.color).trim() : "#ffffff";
+              const radius = typeof (layer.borderRadius ?? layer.radius) === "number" ? Math.min(999, layer.borderRadius ?? layer.radius) : 999;
               const text = getLayerText(layer);
+              const fontSize = Math.min(96, Math.max(10, Number(layer.fontSize) || Math.min(32, Math.floor(h * 0.5))));
               return (
                 <Group key={layer.id} x={layer.x} y={layer.y} draggable onDragEnd={(e) => onLayerDragEnd(layer.id, e.target.x(), e.target.y())}>
-                  <Rect width={w} height={h} fill={bg} cornerRadius={Math.min(999, h / 2, w / 2)} listening={false} />
+                  <Rect width={w} height={h} fill={bg} cornerRadius={Math.min(radius, h / 2, w / 2)} listening={false} />
                   <KonvaText
                     text={text || " "}
                     width={w}
                     height={h}
-                    fontSize={Math.min(32, h * 0.5)}
+                    fontSize={fontSize}
                     fontFamily="Inter, sans-serif"
                     fontStyle="bold"
                     fill={color}
@@ -262,8 +265,8 @@ function ComposeEditor({
     ? Math.min(containerSize.w / canvasWidth, containerSize.h / canvasHeight, 1)
     : scaleProp;
 
-  const handleMouseMove = useCallback(
-    (e: MouseEvent) => {
+  const handlePointerMove = useCallback(
+    (e: PointerEvent) => {
       if (!dragging || !containerRef.current) return;
       const rect = containerRef.current.getBoundingClientRect();
       const deltaXPct = (e.clientX - dragging.startX) / rect.width;
@@ -278,17 +281,19 @@ function ComposeEditor({
     [dragging, setLayout]
   );
 
-  const handleMouseUp = useCallback(() => setDragging(null), []);
+  const handlePointerUp = useCallback(() => setDragging(null), []);
 
   useEffect(() => {
     if (!dragging) return;
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerUp);
     return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerUp);
     };
-  }, [dragging, handleMouseMove, handleMouseUp]);
+  }, [dragging, handlePointerMove, handlePointerUp]);
 
   const items: { key: TextLayoutKey; label: string; text: string; isButton?: boolean }[] = [
     { key: "headline", label: "Nadpis", text: draftTexts.headline || "Nadpis" },
@@ -336,9 +341,10 @@ function ComposeEditor({
                 boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
                 border: isSelected ? "2px solid var(--primary)" : "2px solid transparent",
               }}
-              onMouseDown={(e) => {
+              onPointerDown={(e) => {
                 e.preventDefault();
-                if (e.button === 0) {
+                if (e.button === 0 || e.pointerType !== "mouse") {
+                  (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
                   onSelectLayer(key);
                   setDragging({ id: key, startX: e.clientX, startY: e.clientY, startXPct: item.xPct, startYPct: item.yPct });
                 }
@@ -363,9 +369,10 @@ function ComposeEditor({
               border: isSelected ? "2px solid var(--primary)" : "2px solid transparent",
               lineHeight: 1.2,
             }}
-            onMouseDown={(e) => {
+            onPointerDown={(e) => {
               e.preventDefault();
-              if (e.button === 0) {
+              if (e.button === 0 || e.pointerType !== "mouse") {
+                (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
                 onSelectLayer(key);
                 setDragging({ id: key, startX: e.clientX, startY: e.clientY, startXPct: item.xPct, startYPct: item.yPct });
               }
@@ -408,6 +415,7 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
 
   // Quick settings
   const [style, setStyle] = useState("minimalist");
+  const [stylePreset, setStylePreset] = useState("auto");
   const [format, setFormat] = useState("square");
   const [purpose, setPurpose] = useState("prodej");
   const [color, setColor] = useState("neutral");
@@ -424,7 +432,7 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
   const [loadingRender, setLoadingRender] = useState(false);
   const [errorCompose, setErrorCompose] = useState<string | null>(null);
   const [errorRender, setErrorRender] = useState<string | null>(null);
-  const [editMode, setEditMode] = useState(false);
+  const [designPanelOpen, setDesignPanelOpen] = useState(true);
   const [lastComposeMeta, setLastComposeMeta] = useState<{ backgroundUrl: string; format: string; resolution: string } | null>(null);
   const initialLayoutRef = useRef<Record<TextLayoutKey, TextLayoutItem> | null>(null);
   const previewContainerRef = useRef<HTMLDivElement>(null);
@@ -471,12 +479,12 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
             ...DEFAULT_LAYOUT.cta,
             xPct: cta.x / cw,
             yPct: cta.y / ch,
-            widthPct: typeof cta.w === "number" ? cta.w / cw : 0.26,
-            heightPct: typeof cta.h === "number" ? cta.h / ch : 0.06,
+            widthPct: typeof (cta.width ?? cta.w) === "number" ? (cta.width ?? cta.w) / cw : 0.26,
+            heightPct: typeof (cta.height ?? cta.h) === "number" ? (cta.height ?? cta.h) / ch : 0.06,
             fontSize: Number(cta.fontSize) || 20,
-            color: (cta.color && String(cta.color).trim()) || "#ffffff",
-            bgColor: (cta.bg && String(cta.bg).trim()) || "#2563eb",
-            borderRadius: typeof cta.radius === "number" ? cta.radius : 999,
+            color: ((cta.textColor ?? cta.color) && String(cta.textColor ?? cta.color).trim()) ? String(cta.textColor ?? cta.color).trim() : "#ffffff",
+            bgColor: ((cta.backgroundColor ?? cta.bg) && String(cta.backgroundColor ?? cta.bg).trim()) ? String(cta.backgroundColor ?? cta.bg).trim() : "#2563eb",
+            borderRadius: typeof (cta.borderRadius ?? cta.radius) === "number" ? (cta.borderRadius ?? cta.radius) : 999,
           }
         : { ...DEFAULT_LAYOUT.cta },
     };
@@ -595,6 +603,7 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
           format: composeFormat,
           resolution: "standard",
           style: styleMap[style] || "minimalisticky",
+          stylePreset: stylePreset === "auto" ? undefined : stylePreset,
           purpose: purpose,
           palette: paletteMap[color] || "neutralni",
           prompt: prompt.trim(),
@@ -676,6 +685,7 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
           format: composeFormat,
           resolution: "standard",
           style: styleMap[style] || "minimalisticky",
+          stylePreset: stylePreset === "auto" ? undefined : stylePreset,
           purpose: purpose,
           palette: paletteMap[color] || "neutralni",
           prompt: unifiedPrompt,
@@ -797,28 +807,60 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
     setErrorRender(null);
     setLoadingRender(true);
     try {
+      const { width: cw, height: ch } = getCanvasDimensions(meta.format, meta.resolution);
       const h = layout.headline;
       const s = layout.subheadline;
       const c = layout.cta;
-      const layoutOverrides = {
-        headline: { xPct: h.xPct, yPct: h.yPct, fontSize: h.fontSize, color: h.color, useAutoContrast: h.useAutoContrast !== false },
-        subheadline: { xPct: s.xPct, yPct: s.yPct, fontSize: s.fontSize, color: s.color, useAutoContrast: s.useAutoContrast !== false },
-        cta: isCtaLayout(c)
-          ? { xPct: c.xPct, yPct: c.yPct, widthPct: c.widthPct, heightPct: c.heightPct, fontSize: c.fontSize, color: c.color, bgColor: c.bgColor || "#2563eb", borderRadius: typeof c.borderRadius === "number" ? c.borderRadius : 999, useAutoContrast: c.useAutoContrast !== false }
-          : { xPct: c.xPct, yPct: c.yPct, widthPct: 0.26, heightPct: 0.06, fontSize: c.fontSize, color: c.color, bgColor: "#2563eb", borderRadius: 999, useAutoContrast: c.useAutoContrast !== false },
-      };
+      const ctaLayout = isCtaLayout(c) ? c : { ...DEFAULT_LAYOUT.cta } as CtaLayoutItem;
+      const layersPayload = [
+        { type: "gradient", direction: "bottom", strength: 0.4 },
+        {
+          type: "text",
+          id: "headline",
+          text: (draftTexts.headline || "").trim().slice(0, 80),
+          x: Math.round(h.xPct * cw),
+          y: Math.round(h.yPct * ch),
+          fontSize: Math.max(12, Math.min(140, h.fontSize)),
+          fontWeight: 800,
+          color: h.color || "#ffffff",
+          useAutoContrast: h.useAutoContrast !== false,
+          align: "left",
+          maxWidthPct: 0.8,
+        },
+        {
+          type: "text",
+          id: "subheadline",
+          text: (draftTexts.subheadline || "").trim().slice(0, 140),
+          x: Math.round(s.xPct * cw),
+          y: Math.round(s.yPct * ch),
+          fontSize: Math.max(12, Math.min(140, s.fontSize)),
+          fontWeight: 400,
+          color: s.color || "#ffffff",
+          useAutoContrast: s.useAutoContrast !== false,
+          align: "left",
+          maxWidthPct: 0.8,
+        },
+        {
+          type: "button",
+          id: "cta",
+          text: (draftTexts.cta || "").trim().slice(0, 32),
+          x: Math.round(ctaLayout.xPct * cw),
+          y: Math.round(ctaLayout.yPct * ch),
+          width: Math.round(ctaLayout.widthPct * cw),
+          height: Math.round(ctaLayout.heightPct * ch),
+          fontSize: Math.max(12, Math.min(96, ctaLayout.fontSize)),
+          backgroundColor: ctaLayout.bgColor && /^#[0-9a-fA-F]{3,8}$/.test(ctaLayout.bgColor) ? ctaLayout.bgColor : "#2563eb",
+          textColor: ctaLayout.color || "#ffffff",
+          borderRadius: typeof ctaLayout.borderRadius === "number" ? ctaLayout.borderRadius : 999,
+        },
+      ];
       const data = await neobotFetch("/api/images/compose/render", {
         method: "POST",
         body: JSON.stringify({
           backgroundUrl: meta.backgroundUrl,
           format: meta.format,
           resolution: meta.resolution,
-          headline: draftTexts.headline,
-          subheadline: draftTexts.subheadline,
-          cta: draftTexts.cta,
-          layout: layoutOverrides,
-          layoutOverrides,
-          autoContrast: true,
+          layers: layersPayload,
         }),
       }) as any;
       const compositeUrl = data?.composite?.url
@@ -1079,6 +1121,19 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
               </div>
 
               <div className="space-y-2">
+                <label className="text-sm text-muted-foreground">Styl obrázku (preset)</label>
+                <div className="flex flex-wrap gap-2">
+                  {stylePresetOptions.map(opt => (
+                    <button key={opt.id} onClick={() => setStylePreset(opt.id)}
+                      className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                        stylePreset === opt.id ? "bg-accent text-accent-foreground" : "bg-muted/50 text-muted-foreground hover:bg-muted"
+                      }`}
+                    >{opt.label}</button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-2">
                 <label className="text-sm text-muted-foreground">Formát <span className="text-xs opacity-60">(odvozeno z typu)</span></label>
                 <div className="flex flex-wrap gap-2">
                   {formatOptions.map(opt => (
@@ -1273,7 +1328,7 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
                 ref={previewContainerRef}
                 className="relative rounded-2xl border border-white/10 bg-white/5 h-[calc(100vh-260px)] min-h-[520px] overflow-hidden flex items-center justify-center"
               >
-                {editMode && Array.isArray(composeState.layers) && composeState.layers.some((l: any) => (l.type === "text" || l.type === "button") && typeof l.x === "number") ? (
+                {composeState.backgroundUrl ? (
                   <ComposeEditor
                     composeState={composeState}
                     draftTexts={draftTexts}
@@ -1289,7 +1344,7 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
                   />
                 ) : (
                   <img
-                    src={imageOutput.imageUrl || (composeState.backgroundUrl.startsWith("http") ? composeState.backgroundUrl : `${NEOBOT_API_BASE}${composeState.backgroundUrl}`)}
+                    src={imageOutput?.imageUrl || ""}
                     alt="Návrh"
                     className="w-full h-full object-contain"
                   />
@@ -1306,16 +1361,20 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
               <div className="sticky top-24 h-[calc(100vh-260px)] overflow-y-auto rounded-2xl border border-white/10 bg-white/5 p-4 flex flex-col">
                 <div className="space-y-4 pb-4">
                   {composeState && (
-                    <Button
-                      variant={editMode ? "secondary" : "outline"}
-                      size="sm"
-                      className="w-full"
-                      onClick={() => setEditMode((v) => !v)}
+                    <button
+                      type="button"
+                      onClick={() => setDesignPanelOpen((v) => !v)}
+                      className="w-full flex items-center justify-between rounded-lg border border-white/10 px-3 py-2 text-left text-sm font-medium text-foreground hover:bg-white/5"
                     >
-                      <LayoutTemplate className="w-4 h-4 mr-1" />
-                      {editMode ? "Skrýt editor" : "Upravit design"}
-                    </Button>
+                      <span className="flex items-center gap-2">
+                        <LayoutTemplate className="w-4 h-4" />
+                        {designPanelOpen ? "Skrýt editor" : "Zobrazit editor"}
+                      </span>
+                      <ChevronDown className={`w-4 h-4 transition-transform ${designPanelOpen ? "" : "-rotate-90"}`} />
+                    </button>
                   )}
+                  {designPanelOpen && (
+                  <>
                   <div className="flex items-center justify-between">
                     <h4 className="font-semibold text-foreground">Texty grafiky</h4>
                     {composeState && (
@@ -1338,7 +1397,7 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
                       <h5 className="text-sm font-medium text-foreground">Upravit: {selectedLayer === "headline" ? "Nadpis" : selectedLayer === "subheadline" ? "Podnadpis" : "CTA"}</h5>
                       <div className="space-y-2">
                         <Label>Velikost písma</Label>
-                        <Slider value={[layout[selectedLayer].fontSize]} onValueChange={([v]) => setLayout((prev) => ({ ...prev, [selectedLayer]: { ...prev[selectedLayer], fontSize: v ?? prev[selectedLayer].fontSize } }))} min={12} max={selectedLayer === "cta" ? 24 : 72} step={2} />
+                        <Slider value={[layout[selectedLayer].fontSize]} onValueChange={([v]) => setLayout((prev) => ({ ...prev, [selectedLayer]: { ...prev[selectedLayer], fontSize: v ?? prev[selectedLayer].fontSize } }))} min={12} max={selectedLayer === "cta" ? 48 : 72} step={2} />
                         <span className="text-xs text-muted-foreground">{layout[selectedLayer].fontSize}px</span>
                       </div>
                       <div className="flex items-center justify-between gap-2">
@@ -1356,6 +1415,16 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
                       </div>
                       {selectedLayer === "cta" && isCtaLayout(layout.cta) && (
                         <>
+                          <div className="space-y-2">
+                            <Label>Šířka tlačítka (%)</Label>
+                            <Slider value={[Math.round((layout.cta.widthPct ?? 0.26) * 100)]} onValueChange={([v]) => setLayout((prev) => ({ ...prev, cta: { ...prev.cta, widthPct: (v ?? 26) / 100 } }))} min={10} max={90} step={2} />
+                            <span className="text-xs text-muted-foreground">{Math.round((layout.cta.widthPct ?? 0.26) * 100)}%</span>
+                          </div>
+                          <div className="space-y-2">
+                            <Label>Výška tlačítka (%)</Label>
+                            <Slider value={[Math.round((layout.cta.heightPct ?? 0.06) * 100)]} onValueChange={([v]) => setLayout((prev) => ({ ...prev, cta: { ...prev.cta, heightPct: (v ?? 6) / 100 } }))} min={3} max={20} step={1} />
+                            <span className="text-xs text-muted-foreground">{Math.round((layout.cta.heightPct ?? 0.06) * 100)}%</span>
+                          </div>
                           <div className="space-y-2">
                             <Label>Barva pozadí CTA</Label>
                             <div className="flex items-center gap-2">
@@ -1392,6 +1461,8 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
                     Zrušit úpravy
                   </Button>
                 </div>
+                  </>
+                  )}
               </div>
             </div>
           ) : outputMode === "marketing" ? (

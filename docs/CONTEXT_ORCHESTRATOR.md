@@ -93,3 +93,15 @@ V dev (`NODE_ENV !== "production"`) je debug automaticky zapnutý u `/api/images
      - `prompt` / `userPrompt` / `brief` (klidně stejná hodnota).
      - `outputType`: např. `"ads_copy"`, `"seo_article"`, `"image"`, `"video_prompt"`, `"content_generate"`.
    - Při `?debug=1` kontrolovat v odpovědi pole `_debug`.
+
+---
+
+## Layers contract (POST /api/images/compose/render)
+
+Rychlý render bez generování pozadí: endpoint očekává `backgroundUrl`, `format`, `resolution` a **`layers`** (pole vrstev). Jediný zdroj pravdy pro pozice a styly je `layers`.
+
+- **gradient:** `{ type: "gradient", direction?: "bottom"|"top", strength?: 0–1 }`
+- **text:** `{ type: "text", id: "headline"|"subheadline", text, x, y` (px), `fontSize`, `fontWeight?`, `color`, `align?`, `maxWidthPct?`, `useAutoContrast?` }
+- **button (CTA):** `{ type: "button", id: "cta", text, x, y, w, h` (px), `fontSize`, `bg`, `color`, `radius` }
+
+Souřadnice `x`, `y` (a u CTA `w`, `h`) jsou v pixelech; canvas rozměry dává `getCanvasDimensions(format, resolution)`. Při `?debug=1` odpověď obsahuje `_debug.layersUsed` (vrstvy předané rendereru).

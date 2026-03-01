@@ -109,6 +109,7 @@ async function buildContextPack({ body = {}, user, workspace, routeName = "" }) 
     tone: body.tone ?? clientProfile?.style ?? (workspace && workspace.tone) ?? null,
     length: body.length ?? null,
     formatHints: Array.isArray(body.formatHints) ? body.formatHints : [],
+    preset: body.stylePreset && String(body.stylePreset).trim() ? String(body.stylePreset).trim().toLowerCase() : "auto",
   };
 
   const traceId = body.traceId ?? crypto.randomUUID();

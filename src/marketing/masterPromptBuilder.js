@@ -56,6 +56,20 @@ function pickCreativeVariation(variationKey) {
   return CREATIVE_VARIATION_SEEDS[index];
 }
 
+const STYLE_PRESET_PROMPTS = {
+  photographic: "photorealistic, natural lighting, DSLR, shallow depth of field",
+  realistic: "highly realistic, true-to-life textures, accurate proportions",
+  cinematic: "cinematic lighting, film look, dramatic contrast, anamorphic",
+  animation: "stylized animation, clean outlines, vibrant, illustration",
+  design: "graphic design, minimalist, clean shapes, modern poster style",
+};
+
+function getStylePresetBlock(preset) {
+  if (!preset || preset === "auto") return "";
+  const key = String(preset).toLowerCase();
+  return STYLE_PRESET_PROMPTS[key] || "";
+}
+
 /**
  * Build the master image prompt for all image generation (backgrounds, ads, product variants).
  * Composes: GLOBAL_POSITIVE_BASE + industry (environments, lighting) + HERO_LOCK.required + userPrompt + variation + "Strictly stay within [industry] context".
@@ -67,6 +81,8 @@ function pickCreativeVariation(variationKey) {
  * @param {string} opts.imageMode - "background" | "img2img" | "ads"
  * @param {string} opts.variationKey - For anti-repeat (e.g. requestId-i)
  * @param {string} opts.placementHint - Copy-space hint (e.g. for background mode)
+ * @param {string} opts.format - "square" | "story" | "landscape" (for portrait/1:1 anti-collage constraints)
+ * @param {string} opts.stylePreset - "auto" | "photographic" | "realistic" | "cinematic" | "animation" | "design"
  */
 function buildMasterImagePrompt(opts) {
   const {
@@ -77,6 +93,8 @@ function buildMasterImagePrompt(opts) {
     imageMode = "background",
     variationKey,
     placementHint,
+    format,
+    stylePreset,
   } = opts || {};
 
   const userBrief = (userPrompt != null ? userPrompt : campaignPrompt) != null
@@ -93,6 +111,15 @@ function buildMasterImagePrompt(opts) {
   const parts = [];
 
   parts.push(GLOBAL_POSITIVE_BASE);
+
+  const isPortraitOrSquare = format === "story" || format === "square";
+  if (isPortraitOrSquare) {
+    parts.push("single subject centered, clean composition, one scene only");
+  }
+
+  const styleBlock = getStylePresetBlock(stylePreset);
+  if (styleBlock) parts.push(styleBlock);
+
   parts.push(ind.environments);
   parts.push(ind.lighting);
   parts.push(ind.heroSubjects);

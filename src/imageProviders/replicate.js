@@ -76,6 +76,8 @@ async function generateBackground(params) {
     variationKey,
     placementHint,
     textLayout,
+    format,
+    stylePreset,
   } = params || {};
 
   const profile = clientProfile && typeof clientProfile === "object"
@@ -90,6 +92,8 @@ async function generateBackground(params) {
     imageMode: imageMode || "background",
     variationKey: variationKey || jobId,
     placementHint: placementHint || null,
+    format: format || null,
+    stylePreset: stylePreset || null,
   });
   let negativePrompt = buildMasterNegativePrompt({
     clientProfile: profile,

@@ -137,7 +137,7 @@ const COPY_SPACE_BY_PLACEMENT = {
  * Used by compose to pass into replicate so prompt is always built via master.
  */
 function getBackgroundPromptParams(opts) {
-  const { userPrompt, topic, style, palette, purpose, brand, textLayout, textPlacement, clientProfile: clientProfileFromReq } = opts || {};
+  const { userPrompt, topic, style, palette, purpose, brand, textLayout, textPlacement, clientProfile: clientProfileFromReq, format, stylePreset } = opts || {};
   const brief = (userPrompt && String(userPrompt).trim()) || "professional marketing visual";
   const detectedIndustry = detectIndustry(brief);
   let effectiveIndustry = (clientProfileFromReq && clientProfileFromReq.industryLock && clientProfileFromReq.industry)
@@ -194,6 +194,8 @@ function getBackgroundPromptParams(opts) {
     industry,
     campaignPrompt: campaignParts.join(". "),
     placementHint,
+    format: format || null,
+    stylePreset: stylePreset && String(stylePreset).trim() ? String(stylePreset).trim().toLowerCase() : "auto",
   };
 }
 
@@ -641,6 +643,8 @@ async function composeImageWithText(options, requestId) {
     textLayout,
     textPlacement: requestedPlacement,
     clientProfile: options.clientProfile,
+    format,
+    stylePreset: options.stylePreset || "auto",
   });
 
   if (DEBUG_COMPOSE) {

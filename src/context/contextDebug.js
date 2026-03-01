@@ -24,6 +24,7 @@ function buildDebugOutput(contextPack, extra = {}) {
       topicKeywords: contextPack.topicKeywords,
       sources: contextPack.sources,
       traceId: contextPack.traceId,
+      style: contextPack.style && typeof contextPack.style === "object" ? { preset: contextPack.style.preset } : undefined,
     },
   };
   if (extra.finalSystemPrompt != null) out.finalSystemPrompt = truncate(extra.finalSystemPrompt, 400);
