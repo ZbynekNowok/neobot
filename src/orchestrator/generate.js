@@ -62,15 +62,21 @@ async function generateText({ contextPack, task, params = {}, debug = false }) {
     console.log("[NeoBot Orchestrator]", contextPack.traceId, contextPack.resolvedIndustry, contextPack.outputType);
   }
   markContextUsage(contextPack);
-  const result = await llmChat({
-    requestId,
-    traceId: contextPack.traceId,
-    model: params.model || process.env.CONTENT_MODEL || "gpt-4o-mini",
-    messages,
-    temperature: params.temperature ?? 0.7,
-    maxOutputTokens: params.maxOutputTokens ?? 1500,
-    purpose: params.purpose || contextPack.outputType || "neobot_generate",
-  });
+  let result;
+  try {
+    result = await llmChat({
+      requestId,
+      traceId: contextPack.traceId,
+      model: params.model || process.env.CONTENT_MODEL || "gpt-4o-mini",
+      messages,
+      temperature: params.temperature ?? 0.7,
+      maxOutputTokens: params.maxOutputTokens ?? 1500,
+      purpose: params.purpose || contextPack.outputType || "neobot_generate",
+    });
+  } catch (err) {
+    console.error("Orchestrator provider error:", err);
+    throw err;
+  }
 
   if (debug) {
     result._debug = buildDebugOutput(contextPack, {
@@ -105,17 +111,21 @@ async function generateImage({ contextPack, task, params, debug = false }) {
     _traceId: contextPack.traceId,
   };
 
-  if (task === "background" && params.backgroundOnly) {
+  try {
+    if (task === "background" && params.backgroundOnly) {
+      const result = await composeImageWithText(options, contextPack.traceId || params.requestId);
+      if (debug) result._debug = buildDebugOutput(contextPack, result._debug || {});
+      return result;
+    }
     const result = await composeImageWithText(options, contextPack.traceId || params.requestId);
-    if (debug) result._debug = buildDebugOutput(contextPack, result._debug || {});
+    if (debug) {
+      result._debug = buildDebugOutput(contextPack, result._debug || {});
+    }
     return result;
+  } catch (err) {
+    console.error("Orchestrator provider error:", err);
+    throw err;
   }
-
-  const result = await composeImageWithText(options, contextPack.traceId || params.requestId);
-  if (debug) {
-    result._debug = buildDebugOutput(contextPack, result._debug || {});
-  }
-  return result;
 }
 
 /**
@@ -144,13 +154,19 @@ async function generateDesignBackground({ contextPack, params, debug = false }) 
   });
   const negativePrompt = buildNegativePrompt(industry);
 
-  const bgResult = await generateBackground({
-    prompt: bgPrompt,
-    negativePrompt,
-    width: params.width || 1080,
-    height: params.height || 1080,
-    jobId: contextPack.traceId || params.jobId || `design-bg-${Date.now()}`,
-  });
+  let bgResult;
+  try {
+    bgResult = await generateBackground({
+      prompt: bgPrompt,
+      negativePrompt,
+      width: params.width || 1080,
+      height: params.height || 1080,
+      jobId: contextPack.traceId || params.jobId || `design-bg-${Date.now()}`,
+    });
+  } catch (err) {
+    console.error("Orchestrator provider error:", err);
+    throw err;
+  }
 
   const result = {
     background: {
@@ -185,7 +201,13 @@ async function generateBackgroundWithContext({ contextPack, params = {}, debug =
     campaignPrompt: params.campaignPrompt ?? contextPack.brief ?? params.prompt,
     jobId: params.jobId || contextPack.traceId,
   };
-  const result = await generateBackground(merged);
+  let result;
+  try {
+    result = await generateBackground(merged);
+  } catch (err) {
+    console.error("Orchestrator provider error:", err);
+    throw err;
+  }
   if (debug) result._debug = buildDebugOutput(contextPack, { providerPrompt: merged.campaignPrompt });
   return result;
 }
@@ -209,7 +231,13 @@ async function generateFromImageWithContext({ contextPack, params = {}, debug = 
     industry: params.industry ?? contextPack.resolvedIndustry,
     jobId: params.jobId || contextPack.traceId,
   };
-  const result = await generateFromImage(merged);
+  let result;
+  try {
+    result = await generateFromImage(merged);
+  } catch (err) {
+    console.error("Orchestrator provider error:", err);
+    throw err;
+  }
   if (debug) result._debug = buildDebugOutput(contextPack, {});
   return result;
 }

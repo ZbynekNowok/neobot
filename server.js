@@ -1,5 +1,9 @@
 "use strict";
 
+console.log("Starting NeoBot...");
+console.log("Node version:", process.version);
+console.log("Working dir:", process.cwd());
+
 /** Preferovat IPv4 při DNS (častý fix na VPS – vyhnutí se IPv6 problémům). */
 const dns = require("node:dns");
 if (dns.setDefaultResultOrder) dns.setDefaultResultOrder("ipv4first");
@@ -113,8 +117,8 @@ try {
   const { systemAuditRouter } = require("./src/routes/systemAudit.js");
   app.use("/api/system/audit", systemAuditRouter);
   console.log("systemAuditRouter mounted: /api/system/audit/context");
-} catch (e) {
-  console.warn("systemAuditRouter not loaded:", e.message);
+} catch (err) {
+  console.error("Failed to mount systemAudit route:", err.message);
 }
 
 // AI Ads Studio – URL → Ads Draft (F1)
@@ -139,7 +143,39 @@ if (fs.existsSync(frontendDist)) {
   });
 }
 
-const HOST = process.env.HOST || "0.0.0.0";
-app.listen(PORT, HOST, () => {
-  console.log(`Server listening on http://${HOST}:${PORT}`);
+// Global fallback: nginx / load balancer can hit this to verify backend is up
+app.get("/api/status", (req, res) => {
+  res.json({
+    status: "OK",
+    service: "NeoBot",
+    uptime: process.uptime(),
+  });
 });
+
+// Global error handler – prevent unhandled errors from crashing the process
+app.use((err, req, res, next) => {
+  console.error("Express error:", err);
+  res.status(500).json({
+    error: "Internal server error",
+  });
+});
+
+const HOST = process.env.HOST || "0.0.0.0";
+
+function startServer() {
+  try {
+    app.listen(PORT, HOST, () => {
+      console.log("NeoBot backend started");
+      console.log("Port:", PORT);
+      console.log("NODE_ENV:", process.env.NODE_ENV);
+    });
+  } catch (err) {
+    console.error("FATAL STARTUP ERROR:");
+    console.error(err);
+    process.exit(1);
+  }
+}
+
+startServer();
+
+module.exports = app;

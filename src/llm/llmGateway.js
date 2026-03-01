@@ -1,9 +1,13 @@
 const OpenAI = require("openai");
 const { logger } = require("../logger.js");
 
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+const apiKey = process.env.OPENAI_API_KEY;
+if (!apiKey || !String(apiKey).trim()) {
+  console.warn("WARNING: OPENAI_API_KEY missing – LLM features will return 503 until key is set.");
+}
+const client = apiKey && String(apiKey).trim()
+  ? new OpenAI({ apiKey: apiKey.trim() })
+  : null;
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -33,6 +37,12 @@ async function llmChat({
   maxOutputTokens,
   purpose = "neobot_chat",
 }) {
+  if (!client) {
+    const e = new Error("OPENAI_API_KEY missing");
+    e.code = "LLM_UNAVAILABLE";
+    e.httpStatus = 503;
+    throw e;
+  }
   if (process.env.NODE_ENV !== "production") {
     const { assertContextUsed } = require("../context/contextGuard.js");
     const tid = traceId || requestId;

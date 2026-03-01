@@ -38,13 +38,16 @@ Expected: `HTTP/1.1 204 No Content` with headers:
 - Restart PM2: `pm2 restart neobot` or `pm2 start ecosystem.config.js --update-env`
 - Verify: `pm2 list` shows neobot as `online`
 
-### 2. Nginx Configuration
-- Config file: `/etc/nginx/sites-available/default`
-- Server block: `server_name api.neobot.cz`
-- **Produkt běží na PORT (env), nginx proxy musí mířit na ten samý port.** Např. `proxy_pass http://127.0.0.1:3000` když `PORT=3000`, nebo `http://127.0.0.1:$PORT` v konfiguraci.
-- Proxy: `proxy_pass http://127.0.0.1:3000` (nebo hodnota PORT z .env / PM2)
+### 2. Nginx Configuration (port 8080)
+- Backend runs on **port 8080** (PM2 `ecosystem.config.js` sets `PORT: "8080"`). Nginx must proxy to the same port.
+- **Option A – use repo config:**  
+  `sudo cp nginx-api.neobot.cz.conf /etc/nginx/sites-available/api.neobot.cz`  
+  `sudo ln -sf /etc/nginx/sites-available/api.neobot.cz /etc/nginx/sites-enabled/`
+- **Option B – edit existing:** In `/etc/nginx/sites-enabled/default` (or `api.neobot.cz`), set:  
+  `proxy_pass http://127.0.0.1:8080;`
 - Test: `sudo nginx -t`
 - Reload: `sudo systemctl reload nginx`
+- Verify: `curl -s http://127.0.0.1/api/status` (via nginx) → `{"status":"OK","service":"NeoBot",...}`
 
 ### 3. Frontend (Lovable / Vite)
 - Frontend files in `public/` are served by Lovable

@@ -40,7 +40,7 @@ if loc_start is None or loc_end is None:
 
 # Replace lines loc_start+1 to loc_end-1 with proxy config
 new_lines = lines[:loc_start+1]
-new_lines.append('\t\tproxy_pass http://127.0.0.1:3000;\n')
+new_lines.append('\t\tproxy_pass http://127.0.0.1:8080;\n')
 new_lines.append('\t\tproxy_http_version 1.1;\n')
 new_lines.append('\t\tproxy_set_header Host $host;\n')
 new_lines.append('\t\tproxy_set_header X-Real-IP $remote_addr;\n')

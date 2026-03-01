@@ -4,7 +4,7 @@ set -euo pipefail
 echo "===== NGINX API PROXY SETUP ====="
 echo ""
 echo "Current: api.neobot.cz has SSL but serves static files"
-echo "Goal: Proxy all requests to http://127.0.0.1:3000"
+echo "Goal: Proxy all requests to http://127.0.0.1:8080"
 echo ""
 
 # Backup
@@ -30,7 +30,7 @@ sudo sed -i '/server_name api\.neobot\.cz/,/^}/ {
   }
 }' /etc/nginx/sites-available/default << 'PROXY_CONFIG'
 	location / {
-		proxy_pass http://127.0.0.1:3000;
+		proxy_pass http://127.0.0.1:8080;
 		proxy_http_version 1.1;
 		proxy_set_header Host $host;
 		proxy_set_header X-Real-IP $remote_addr;
@@ -58,7 +58,7 @@ sudo sed -i '/server_name api\.neobot\.cz/,/^}/ {
       b loop
     }
     i\
-		proxy_pass http://127.0.0.1:3000;\
+		proxy_pass http://127.0.0.1:8080;\
 		proxy_http_version 1.1;\
 		proxy_set_header Host $host;\
 		proxy_set_header X-Real-IP $remote_addr;\
