@@ -369,6 +369,13 @@ Hodnoť s ohledem na:
 
 Téma reklamy (podle adText): ${topicHint}.
 
+Vrať výhradně validní JSON objekt podle uvedené struktury.
+Nepřidávej žádný text před JSON.
+Nepřidávej žádný text za JSON.
+Nepoužívej Markdown.
+Nepoužívej \`\`\`json bloky.
+Nevracej žádné vysvětlení mimo JSON.
+
 Výstup vrať JEDINĚ jako platný JSON (žádný další text před ani za JSONem) v tomto tvaru:
 {
   "score": number,                  // 0–10
@@ -396,7 +403,7 @@ Piš česky. V improvedVariants generuj maximálně ${variants} variant.`;
       task: taskPrompt,
       params: {
         model: process.env.CONTENT_MODEL || "gpt-4o-mini",
-        temperature: 0.7,
+        temperature: 0.4,
         maxOutputTokens: 1800,
         purpose: "ads_score",
       },
@@ -404,19 +411,33 @@ Piš česky. V improvedVariants generuj maximálně ${variants} variant.`;
     });
 
     const raw = (llmRes.output_text || "").trim();
-    const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      return res.status(502).json({
-        ok: false,
-        error: "LLM_INVALID_JSON",
-        message: "LLM nevrátil platný JSON pro ads/score.",
-      });
+    let jsonText = raw;
+
+    // Pokud model omylem vrátí ```json blok, vezmeme jen jeho obsah.
+    const fencedJsonMatch =
+      raw.match(/```json([\s\S]*?)```/i) ||
+      raw.match(/```([\s\S]*?)```/);
+    if (fencedJsonMatch && fencedJsonMatch[1]) {
+      jsonText = fencedJsonMatch[1].trim();
+    } else {
+      const braceMatch = raw.match(/\{[\s\S]*\}/);
+      if (!braceMatch) {
+        return res.status(502).json({
+          ok: false,
+          error: "LLM_INVALID_JSON",
+          message: "LLM nevrátil platný JSON pro ads/score.",
+        });
+      }
+      jsonText = braceMatch[0];
     }
 
     let parsed;
     try {
-      parsed = JSON.parse(jsonMatch[0]);
-    } catch {
+      parsed = JSON.parse(jsonText);
+    } catch (e) {
+      if (process.env.NODE_ENV !== "production") {
+        console.error("[ads/score] RAW LLM RESPONSE:", raw);
+      }
       return res.status(502).json({
         ok: false,
         error: "LLM_INVALID_JSON",
