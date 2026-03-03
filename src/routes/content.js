@@ -4,6 +4,11 @@ const express = require("express");
 const crypto = require("crypto");
 const { buildContextPack } = require("../context/contextEngine.js");
 const { generateText } = require("../orchestrator/generate.js");
+const {
+  extractSignatures,
+  getAntiRepeatData,
+  rememberOutput,
+} = require("../marketing/variationGuard.js");
 
 let llmChat;
 try {
@@ -217,6 +222,19 @@ contentRouter.post("/content/generate", async (req, res) => {
   const platformName = platform === "instagram" ? "Instagram" : "Facebook";
 
   const profileBlock = buildProfileBlock(profile);
+  const rawUserKey =
+    (req.headers && (req.headers["x-api-key"] || req.headers["x-api-key".toLowerCase()])) ||
+    req.ip ||
+    (req.headers && (req.headers["x-forwarded-for"] || req.headers["x-real-ip"])) ||
+    "anon";
+  const userHash = crypto.createHash("sha256").update(String(rawUserKey)).digest("hex").slice(0, 16);
+  const variationKey = {
+    userKey: userHash,
+    type,
+    industry: profile.industry || profile.business || "",
+    platform,
+  };
+  const antiRepeat = getAntiRepeatData(variationKey);
   const debugEnabledForLlm = debugEnabled || process.env.NODE_ENV !== "production";
 
   try {
@@ -233,10 +251,13 @@ contentRouter.post("/content/generate", async (req, res) => {
       routeName: "content/generate",
     });
 
-    const extraSystem = `Pravidla: Piš pouze finální text příspěvku, žádné vysvětlování. Délka textu: ${lengthRange.min}–${lengthRange.max} znaků.
+    const baseSystem = `Pravidla: Piš pouze finální text příspěvku, žádné vysvětlování. Délka textu: ${lengthRange.min}–${lengthRange.max} znaků.
 Všechny texty musí být uzpůsobeny firemnímu profilu klienta (značka, cílová skupina, tón, USP).${profileBlock}
 
 Výstup vrať jako jeden JSON objekt s klíči: "text", "hashtags" (pole řetězců, každý hashtag s #), "notes" (pole krátkých tipů, volitelné). Žádný text mimo JSON.`;
+    const extraSystem = antiRepeat.instruction
+      ? `${baseSystem}\n\n${antiRepeat.instruction}`
+      : baseSystem;
 
     const taskPrompt = `Vytvoř příspěvek pro ${platformName}.
 Účel: ${purposeDesc}. Tón: ${toneDesc}. Délka: ${lengthRange.min}–${lengthRange.max} znaků.
@@ -263,6 +284,11 @@ Vrať pouze validní JSON ve tvaru: {"text":"...","hashtags":["#tag1","#tag2"],"
     text = stripYearsFromText(text, prompt);
     hashtags = stripYearsFromHashtags(hashtags, prompt);
 
+    const signatures = extractSignatures(
+      [text, Array.isArray(hashtags) ? hashtags.join("\n") : ""].filter(Boolean).join("\n"),
+    );
+    rememberOutput(variationKey, signatures);
+
     const json = {
       ok: true,
       text: text || "",
@@ -270,7 +296,19 @@ Vrať pouze validní JSON ve tvaru: {"text":"...","hashtags":["#tag1","#tag2"],"
       notes: notes || [],
     };
     if (debugEnabled && result._debug) json._debug = result._debug;
-    if (debugEnabled) json._debug = { ...(json._debug || {}), platformSource, platformValue: platform };
+    if (debugEnabled) {
+      json._debug = {
+        ...(json._debug || {}),
+        platformSource,
+        platformValue: platform,
+        antiRepeat: {
+          used: Boolean(antiRepeat && antiRepeat.instruction),
+          bannedHooks: antiRepeat?.debug?.bannedHooks || [],
+          bannedCtas: antiRepeat?.debug?.bannedCtas || [],
+          storeKey: antiRepeat?.debug?.storeKey || "",
+        },
+      };
+    }
     return res.json(json);
   } catch (err) {
     const code = err.code === "LLM_UNAVAILABLE" ? 503 : 500;

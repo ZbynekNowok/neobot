@@ -4,6 +4,11 @@ const express = require("express");
 const crypto = require("crypto");
 const { buildContextPack } = require("../context/contextEngine.js");
 const { generateDesignBackground, generateText } = require("../orchestrator/generate.js");
+const {
+  extractSignatures,
+  getAntiRepeatData,
+  rememberOutput,
+} = require("../marketing/variationGuard.js");
 
 let getAuthUser, ensureWorkspace, getProfileByWorkspaceId, saveOutput;
 try {
@@ -120,6 +125,13 @@ designRouter.post("/design/social-card/draft", getAuthUser, ensureWorkspace, asy
   const debugEnabled = req.query?.debug === "1" || process.env.NODE_ENV !== "production";
 
   try {
+    const rawUserKey =
+      (req.headers && (req.headers["x-api-key"] || req.headers["x-api-key".toLowerCase()])) ||
+      req.ip ||
+      (req.headers && (req.headers["x-forwarded-for"] || req.headers["x-real-ip"])) ||
+      "anon";
+    const userHash = crypto.createHash("sha256").update(String(rawUserKey)).digest("hex").slice(0, 16);
+
     const contextPack = await buildContextPack({
       body: {
         prompt: fullUserBrief,
@@ -131,6 +143,14 @@ designRouter.post("/design/social-card/draft", getAuthUser, ensureWorkspace, asy
       workspace: req.workspace || null,
       routeName: "design/social-card/draft",
     });
+
+    const variationKey = {
+      userKey: userHash,
+      type: "design_social_card",
+      industry: contextPack.resolvedIndustry || (profile && profile.industry) || "",
+      platform: formatKey,
+    };
+    const antiRepeat = getAntiRepeatData(variationKey);
 
     const bgResult = await generateDesignBackground({
       contextPack,
@@ -171,8 +191,21 @@ designRouter.post("/design/social-card/draft", getAuthUser, ensureWorkspace, asy
 Piš česky. Headline úderný, max ~8 slov. CTA krátké.`;
 
     let texts = { headline: "", subheadline: null, bullets: [], cta: "Zjistit více" };
+    let llmRes;
     try {
-      const llmRes = await generateText({
+      const baseTaskPrompt = `${contextBlock}Vytvoř návrh textů pro jeden vizuál na sociální sítě. Výstup vrať JEDINĚ jako platný JSON (žádný další text):
+{
+  "headline": string,
+  "subheadline": string | null,
+  "bullets": string[],
+  "cta": string
+}
+Piš česky. Headline úderný, max ~8 slov. CTA krátké.`;
+      const taskPrompt = antiRepeat.instruction
+        ? `${baseTaskPrompt}\n\n${antiRepeat.instruction}`
+        : baseTaskPrompt;
+
+      llmRes = await generateText({
         contextPack,
         task: taskPrompt,
         params: {
@@ -197,6 +230,18 @@ Piš česky. Headline úderný, max ~8 slov. CTA krátké.`;
     } catch (_) {}
     if (!texts.headline) texts.headline = theme || goals || "Zaujmi své zákazníky";
     if (!texts.cta) texts.cta = "Zjistit více";
+
+    const signatures = extractSignatures(
+      [
+        texts.headline,
+        texts.subheadline,
+        ...(Array.isArray(texts.bullets) ? texts.bullets : []),
+        texts.cta,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+    rememberOutput(variationKey, signatures);
 
     const template = {
       templateId: "social_card_v1",
@@ -229,7 +274,17 @@ Piš česky. Headline úderný, max ~8 slov. CTA krátké.`;
 
     const response = { ok: true, template };
     if (debugEnabled) {
-      response._debug = { ...(bgResult._debug || {}), ...(typeof llmRes !== "undefined" && llmRes._debug ? llmRes._debug : {}) };
+      const baseDebug = {
+        ...(bgResult._debug || {}),
+        ...(typeof llmRes !== "undefined" && llmRes && llmRes._debug ? llmRes._debug : {}),
+      };
+      baseDebug.antiRepeat = {
+        used: Boolean(antiRepeat && antiRepeat.instruction),
+        bannedHooks: antiRepeat?.debug?.bannedHooks || [],
+        bannedCtas: antiRepeat?.debug?.bannedCtas || [],
+        storeKey: antiRepeat?.debug?.storeKey || "",
+      };
+      response._debug = baseDebug;
     }
     res.json(response);
   } catch (err) {

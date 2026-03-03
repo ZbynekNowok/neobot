@@ -7,7 +7,16 @@ const multer = require("multer");
 const { fetch } = require("undici");
 const sharp = require("sharp");
 const { spawn } = require("child_process");
+const crypto = require("crypto");
 const { analyzeUrlAndDraftAds, generateImagesFromUrl, generateProductVariants } = require("../marketing/adsStudio.js");
+const { buildContextPack } = require("../context/contextEngine.js");
+const { generateText } = require("../orchestrator/generate.js");
+const { detectIndustry } = require("../marketing/imageCompose.js");
+const {
+  extractSignatures,
+  getAntiRepeatData,
+  rememberOutput,
+} = require("../marketing/variationGuard.js");
 
 const DEBUG_ADS = process.env.DEBUG_ADS === "1" || process.env.DEBUG === "1";
 const UPLOAD_CLEANUP_DELAY_MS = 8000; // Po úspěchu čekáme, než Replicate stáhne upload
@@ -65,14 +74,37 @@ adsStudioRouter.post("/ads/draft", async (req, res) => {
   }
 
   const requestId = req.id || `ads-${Date.now()}`;
+  const headers = req.headers || {};
+  const rawUserKey =
+    headers["x-api-key"] ||
+    headers["x-api-key".toLowerCase()] ||
+    req.ip ||
+    headers["x-forwarded-for"] ||
+    headers["x-real-ip"] ||
+    "anon";
+  const userHash = crypto.createHash("sha256").update(String(rawUserKey)).digest("hex").slice(0, 16);
+  const variationKey = {
+    userKey: userHash,
+    type: "ads_draft",
+    industry: "",
+    platform: "multi",
+  };
+  const debugEnabled = req.query?.debug === "1" || DEBUG_ADS;
 
   try {
-    const result = await analyzeUrlAndDraftAds(url.trim(), requestId);
-    return res.json({
+    const result = await analyzeUrlAndDraftAds(url.trim(), requestId, {
+      variationKey,
+      debug: debugEnabled,
+    });
+    const json = {
       ok: true,
       brand: result.brand,
       ads: result.ads,
-    });
+    };
+    if (debugEnabled && result._debug) {
+      json._debug = result._debug;
+    }
+    return res.json(json);
   } catch (err) {
     const isFetchError =
       err.code === "FETCH_FAILED" ||
@@ -121,8 +153,32 @@ adsStudioRouter.post("/ads/images", async (req, res) => {
   const isDev = process.env.NODE_ENV !== "production";
   const debug = req.query?.debug === "1" && isDev;
 
+  const headers = req.headers || {};
+  const rawUserKey =
+    headers["x-api-key"] ||
+    headers["x-api-key".toLowerCase()] ||
+    req.ip ||
+    headers["x-forwarded-for"] ||
+    headers["x-real-ip"] ||
+    "anon";
+  const userHash = crypto.createHash("sha256").update(String(rawUserKey)).digest("hex").slice(0, 16);
+  const variationKey = {
+    userKey: userHash,
+    type: "ads_images",
+    industry: "",
+    platform: format,
+  };
+
   try {
-    const { images, _debug } = await generateImagesFromUrl(url.trim(), { count, format, requestId, resolution, clientProfile, debug });
+    const { images, _debug } = await generateImagesFromUrl(url.trim(), {
+      count,
+      format,
+      requestId,
+      resolution,
+      clientProfile,
+      debug,
+      variationKey,
+    });
     const json = {
       ok: true,
       images: images.map((img) => ({
@@ -188,6 +244,263 @@ adsStudioRouter.post("/ads/images", async (req, res) => {
       ok: false,
       error: "INTERNAL_ERROR",
       message: err?.message || "Interní chyba serveru.",
+    });
+  }
+});
+
+adsStudioRouter.post("/ads/score", async (req, res) => {
+  const body = req.body || {};
+  const adTextRaw = typeof body.adText === "string" ? body.adText.trim() : "";
+  const headlineRaw = typeof body.headline === "string" ? body.headline.trim() : "";
+  const ctaRaw = typeof body.cta === "string" ? body.cta.trim() : "";
+  const url = typeof body.url === "string" ? body.url.trim() : "";
+  const platform =
+    body.platform === "facebook" || body.platform === "instagram" || body.platform === "google"
+      ? body.platform
+      : null;
+
+  if (!adTextRaw || adTextRaw.length < 20) {
+    return res.status(400).json({
+      ok: false,
+      error: "INVALID_AD_TEXT",
+      message: "Pole adText je povinné a musí mít alespoň 20 znaků.",
+    });
+  }
+
+  const settings =
+    body.meta && typeof body.meta === "object" && body.meta.settings && typeof body.meta.settings === "object"
+      ? body.meta.settings
+      : {};
+
+  const variantsRaw = settings.variants;
+  let variants = Number(variantsRaw) || 2;
+  if (![1, 2, 3].includes(variants)) variants = 2;
+
+  const debugEnabled = req.query?.debug === "1" || process.env.NODE_ENV !== "production";
+
+  const headers = req.headers || {};
+  const rawUserKey =
+    headers["x-api-key"] ||
+    headers["x-api-key".toLowerCase()] ||
+    req.ip ||
+    headers["x-forwarded-for"] ||
+    headers["x-real-ip"] ||
+    "anon";
+  const userHash = crypto.createHash("sha256").update(String(rawUserKey)).digest("hex").slice(0, 16);
+
+  const campaignContextLines = [];
+  if (settings.goal) campaignContextLines.push(`Cíl kampaně: ${String(settings.goal)}`);
+  if (settings.funnel) campaignContextLines.push(`Fáze funnelu: ${String(settings.funnel)}`);
+  if (settings.angle) campaignContextLines.push(`Kreativní úhel: ${String(settings.angle)}`);
+  if (settings.salesTone) campaignContextLines.push(`Prodejní styl: ${String(settings.salesTone)}`);
+  if (platform) campaignContextLines.push(`Platforma: ${platform}`);
+  if (url) campaignContextLines.push(`URL landing page: ${url}`);
+
+  const topicSource = [adTextRaw, headlineRaw, ctaRaw, url].filter(Boolean).join("\n");
+  let topicHint = "general";
+  let topicIndustry = "general";
+  if (topicSource.trim()) {
+    const cleaned = topicSource.replace(/\s+/g, " ").trim();
+    topicHint = cleaned.length > 220 ? `${cleaned.slice(0, 220)}…` : cleaned;
+    try {
+      topicIndustry = detectIndustry(topicSource) || "general";
+    } catch {
+      topicIndustry = "general";
+    }
+  }
+
+  const baseBriefParts = [
+    "Reklamní text (primární):",
+    adTextRaw,
+    headlineRaw && `Headline: ${headlineRaw}`,
+    ctaRaw && `CTA: ${ctaRaw}`,
+    campaignContextLines.length ? "\nMetadata kampaně:\n" + campaignContextLines.join("\n") : "",
+  ].filter(Boolean);
+  const brief = baseBriefParts.join("\n\n");
+
+  try {
+    const contextPack = await buildContextPack({
+      body: {
+        prompt: brief,
+        userPrompt: brief,
+        brief,
+        adText: adTextRaw,
+        headline: headlineRaw || null,
+        cta: ctaRaw || null,
+        platform: platform || null,
+        meta: { settings },
+        outputType: "ads_score",
+      },
+      routeName: "ads/score",
+    });
+
+    const profileIndustry =
+      (contextPack && (contextPack.resolvedIndustry || (contextPack.profile && contextPack.profile.industry))) ||
+      null;
+    const usedIndustry = topicIndustry || "general";
+    contextPack.resolvedIndustry = usedIndustry;
+
+    const variationKey = {
+      userKey: userHash,
+      type: "ads_score",
+      industry: contextPack.resolvedIndustry || "",
+      platform: platform || "generic",
+    };
+    const antiRepeat = getAntiRepeatData(variationKey);
+
+    const baseTaskPrompt = `Jsi zkušený performance marketér a specialista na online reklamu.
+
+Primární kontext je VŽDY vložený text reklamy (adText). Pokud se téma adText liší od profilu/oboru workspace, MUSÍŠ se řídit textem reklamy a profil ignorovat. Nepřepisuj reklamu do jiného oboru, než jaký vyplývá z adText.
+
+Tvým úkolem je:
+1) Oznámkovat kvalitu dané reklamy na škále 0–10 (0 velmi slabá, 10 špičková).
+2) Stručně shrnout proč (1–2 věty).
+3) Vypsat hlavní silné stránky a slabiny.
+4) Navrhnout konkrétní kroky, jak reklamu zlepšit (copy, struktura, nabídka, CTA, hook).
+5) Vytvořit ${variants} vylepšené varianty reklamy (adText + volitelně headline, CTA) v češtině.
+
+Hodnoť s ohledem na:
+- cíl kampaně, fázi funnelu, kreativní úhel a prodejní styl (pokud jsou v zadání),
+- sílu hooku v prvních větách,
+- jasnost nabídky a konkrétnost benefitů,
+- vhodnou míru urgence (jen pokud dává smysl),
+- čitelnost a srozumitelnost,
+- vhodné CTA.
+
+Téma reklamy (podle adText): ${topicHint}.
+
+Výstup vrať JEDINĚ jako platný JSON (žádný další text před ani za JSONem) v tomto tvaru:
+{
+  "score": number,                  // 0–10
+  "summary": string,                // 1–2 věty
+  "strengths": string[],            // 3–6 bodů
+  "weaknesses": string[],           // 3–6 bodů
+  "suggestions": string[],          // 3–7 konkrétních kroků
+  "improvedVariants": [
+    {
+      "adText": string,
+      "headline": string | null,
+      "cta": string | null
+    }
+  ]
+}
+
+Piš česky. V improvedVariants generuj maximálně ${variants} variant.`;
+
+    const taskPrompt = antiRepeat.instruction
+      ? `${baseTaskPrompt}\n\n${antiRepeat.instruction}`
+      : baseTaskPrompt;
+
+    const llmRes = await generateText({
+      contextPack,
+      task: taskPrompt,
+      params: {
+        model: process.env.CONTENT_MODEL || "gpt-4o-mini",
+        temperature: 0.7,
+        maxOutputTokens: 1800,
+        purpose: "ads_score",
+      },
+      debug: debugEnabled,
+    });
+
+    const raw = (llmRes.output_text || "").trim();
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      return res.status(502).json({
+        ok: false,
+        error: "LLM_INVALID_JSON",
+        message: "LLM nevrátil platný JSON pro ads/score.",
+      });
+    }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(jsonMatch[0]);
+    } catch {
+      return res.status(502).json({
+        ok: false,
+        error: "LLM_INVALID_JSON",
+        message: "Neplatný JSON z LLM pro ads/score.",
+      });
+    }
+
+    const num = (v) => {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return 0;
+      return Math.max(0, Math.min(10, n));
+    };
+    const str = (v) => (typeof v === "string" ? v.trim() : "");
+    const strArray = (v, min = 0, max = 10) => {
+      if (!Array.isArray(v)) return [];
+      return v
+        .map((x) => (typeof x === "string" ? x.trim() : ""))
+        .filter(Boolean)
+        .slice(0, max);
+    };
+
+    const score = num(parsed.score);
+    const summary = str(parsed.summary);
+    const strengths = strArray(parsed.strengths, 0, 8);
+    const weaknesses = strArray(parsed.weaknesses, 0, 8);
+    const suggestions = strArray(parsed.suggestions, 0, 10);
+
+    const rawVariants = Array.isArray(parsed.improvedVariants) ? parsed.improvedVariants : [];
+    const improvedVariants = rawVariants
+      .map((v) => ({
+        adText: str(v.adText),
+        headline: str(v.headline) || undefined,
+        cta: str(v.cta) || undefined,
+      }))
+      .filter((v) => v.adText)
+      .slice(0, variants);
+
+    const signatureSource = [
+      adTextRaw,
+      headlineRaw,
+      ctaRaw,
+      ...improvedVariants.map((v) => v.adText),
+      ...improvedVariants.map((v) => v.headline || ""),
+      ...improvedVariants.map((v) => v.cta || ""),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const signatures = extractSignatures(signatureSource);
+    rememberOutput(variationKey, signatures);
+
+    const response = {
+      ok: true,
+      score,
+      summary,
+      strengths,
+      weaknesses,
+      suggestions,
+      improvedVariants,
+    };
+
+    if (debugEnabled) {
+      response._debug = {
+        ...(llmRes._debug || {}),
+        topicHint,
+        topicIndustry,
+        profileIndustry,
+        usedIndustry,
+        antiRepeat: {
+          used: Boolean(antiRepeat && antiRepeat.instruction),
+          bannedHooks: antiRepeat?.debug?.bannedHooks || [],
+          bannedCtas: antiRepeat?.debug?.bannedCtas || [],
+          storeKey: antiRepeat?.debug?.storeKey || "",
+        },
+      };
+    }
+
+    return res.json(response);
+  } catch (err) {
+    const message = err && err.message ? String(err.message) : "Scoring failed";
+    console.error("[POST /api/ads/score]", message, err);
+    return res.status(500).json({
+      ok: false,
+      error: "ADS_SCORE_FAILED",
+      message,
     });
   }
 });
@@ -270,6 +583,22 @@ adsStudioRouter.post("/ads/product-variants", (req, res) => {
     const isDev = process.env.NODE_ENV !== "production";
     const debug = req.query?.debug === "1" && isDev;
 
+    const headers = req.headers || {};
+    const rawUserKey =
+      headers["x-api-key"] ||
+      headers["x-api-key".toLowerCase()] ||
+      req.ip ||
+      headers["x-forwarded-for"] ||
+      headers["x-real-ip"] ||
+      "anon";
+    const userHash = crypto.createHash("sha256").update(String(rawUserKey)).digest("hex").slice(0, 16);
+    const variationKey = {
+      userKey: userHash,
+      type: "ads_product",
+      industry: "",
+      platform: format,
+    };
+
     try {
       const { images, _debug } = await generateProductVariants({
         publicImageUrl,
@@ -280,6 +609,7 @@ adsStudioRouter.post("/ads/product-variants", (req, res) => {
         requestId,
         resolution,
         clientProfile,
+        variationKey,
         debug,
       });
 

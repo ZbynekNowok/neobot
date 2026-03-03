@@ -11,6 +11,11 @@ const {
 } = require("../orchestrator/generate.js");
 const { detectIndustry } = require("./imageCompose.js");
 const { getClientProfile } = require("./clientProfile.js");
+const {
+  extractSignatures,
+  getAntiRepeatData,
+  rememberOutput,
+} = require("./variationGuard.js");
 
 const FETCH_TIMEOUT_MS = 15000;
 const MAX_PROMPT_CHARS = 12000;
@@ -140,7 +145,8 @@ async function fetchUrlContent(url) {
  * @param {string} [requestId] - pro logování
  * @returns {Promise<{ brand: object, ads: object }>}
  */
-async function analyzeUrlAndDraftAds(url, requestId = "ads-draft") {
+async function analyzeUrlAndDraftAds(url, requestId = "ads-draft", options = {}) {
+  const debug = Boolean(options.debug);
   const content = await fetchUrlContent(url);
 
   const brief = `Title: ${content.title}\nMeta description: ${content.metaDescription}\n\nTělo (nadpisy + odstavce):\n${content.bodyText}`;
@@ -149,18 +155,29 @@ async function analyzeUrlAndDraftAds(url, requestId = "ads-draft") {
     routeName: "ads/draft",
   });
 
-  const taskPrompt = `Jsi expert na reklamu a brand. Na základě obsahu webu (v zadání) vytvoř:
+  const baseTaskPrompt = `Jsi expert na reklamu a brand. Na základě obsahu webu (v zadání) vytvoř:
 1) Stručný brand summary (název, popis, služby, USP, tón, cílová skupina).
 2) Reklamní texty pro Meta (Facebook/Instagram) a Google Ads.
 Vrať JEDINĚ platný JSON bez markdown a bez textu před/za ním. Struktura:
 { "brand": { "name", "description", "services", "usp", "tone", "target_audience" }, "ads": { "meta_primary_texts" (5), "meta_headlines" (5), "google_headlines" (10, max 30 znaků), "google_descriptions" (6, max 90 znaků) } }
 Všechny texty v češtině. Pole services a usp 0–10 položek. Ostatní pole přesně v uvedeném počtu.`;
+  const variationKeyBase = options.variationKey || null;
+  const variationKey = variationKeyBase
+    ? {
+        ...variationKeyBase,
+        industry: contextPack.resolvedIndustry || variationKeyBase.industry || "",
+      }
+    : null;
+  const antiRepeat = variationKey ? getAntiRepeatData(variationKey) : { instruction: "", debug: null };
+  const taskPrompt = antiRepeat.instruction
+    ? `${baseTaskPrompt}\n\n${antiRepeat.instruction}`
+    : baseTaskPrompt;
 
   const response = await generateText({
     contextPack,
     task: taskPrompt,
     params: { requestId, model: "gpt-4o-mini", purpose: "ads_draft", temperature: 0.7, maxOutputTokens: 4000 },
-    debug: false,
+    debug,
   });
 
   const text = (response.output_text || "").trim();
@@ -187,22 +204,53 @@ Všechny texty v češtině. Pole services a usp 0–10 položek. Ostatní pole 
       .map((x) => x.trim().slice(0, maxLen || 10000));
   };
 
-  return {
-    brand: {
-      name: ensureString(brand.name),
-      description: ensureString(brand.description),
-      services: ensureStringArray(brand.services),
-      usp: ensureStringArray(brand.usp),
-      tone: ensureString(brand.tone),
-      target_audience: ensureString(brand.target_audience),
-    },
-    ads: {
-      meta_primary_texts: ensureStringArray(ads.meta_primary_texts).slice(0, 5),
-      meta_headlines: ensureStringArray(ads.meta_headlines, 200).slice(0, 5),
-      google_headlines: ensureStringArray(ads.google_headlines, 30).slice(0, 10),
-      google_descriptions: ensureStringArray(ads.google_descriptions, 90).slice(0, 6),
-    },
+  const normalizedBrand = {
+    name: ensureString(brand.name),
+    description: ensureString(brand.description),
+    services: ensureStringArray(brand.services),
+    usp: ensureStringArray(brand.usp),
+    tone: ensureString(brand.tone),
+    target_audience: ensureString(brand.target_audience),
   };
+  const normalizedAds = {
+    meta_primary_texts: ensureStringArray(ads.meta_primary_texts).slice(0, 5),
+    meta_headlines: ensureStringArray(ads.meta_headlines, 200).slice(0, 5),
+    google_headlines: ensureStringArray(ads.google_headlines, 30).slice(0, 10),
+    google_descriptions: ensureStringArray(ads.google_descriptions, 90).slice(0, 6),
+  };
+
+  if (variationKey) {
+    const signatureSource = [
+      normalizedBrand.name,
+      normalizedBrand.description,
+      ...(normalizedBrand.usp || []),
+      ...(normalizedAds.meta_primary_texts || []),
+      ...(normalizedAds.meta_headlines || []),
+      ...(normalizedAds.google_headlines || []),
+      ...(normalizedAds.google_descriptions || []),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const signatures = extractSignatures(signatureSource);
+    rememberOutput(variationKey, signatures);
+  }
+
+  const result = {
+    brand: normalizedBrand,
+    ads: normalizedAds,
+  };
+  if (debug) {
+    result._debug = {
+      ...(response._debug || {}),
+      antiRepeat: {
+        used: Boolean(antiRepeat && antiRepeat.instruction),
+        bannedHooks: antiRepeat?.debug?.bannedHooks || [],
+        bannedCtas: antiRepeat?.debug?.bannedCtas || [],
+        storeKey: antiRepeat?.debug?.storeKey || "",
+      },
+    };
+  }
+  return result;
 }
 
 /** Formát obrázku → výchozí rozměry (šířka, výška) pro standardní rozlišení. */
@@ -329,7 +377,18 @@ async function generateImagesFromUrl(url, options = {}) {
     routeName: "ads/images",
   });
 
-  const taskPrompt = `Pro brand (viz zadání) vytvoř ${count} nápadů na reklamní obrázky. Pro každý obrázek: krátký popis scény v angličtině pro AI image model (co na obrázku, nálada, styl). BEZ textu v obrázku. A krátký caption/headline v češtině (CTA). Vrať JEDINĚ platný JSON: { "items": [ { "prompt": "english scene description", "caption": "český caption" }, ... ] }. Přesně ${count} položek v items.`;
+  const baseTaskPrompt = `Pro brand (viz zadání) vytvoř ${count} nápadů na reklamní obrázky. Pro každý obrázek: krátký popis scény v angličtině pro AI image model (co na obrázku, nálada, styl). BEZ textu v obrázku. A krátký caption/headline v češtině (CTA). Vrať JEDINĚ platný JSON: { "items": [ { "prompt": "english scene description", "caption": "český caption" }, ... ] }. Přesně ${count} položek v items.`;
+  const variationKeyBase = options.variationKey || null;
+  const variationKey = variationKeyBase
+    ? {
+        ...variationKeyBase,
+        industry: contextPack.resolvedIndustry || variationKeyBase.industry || "",
+      }
+    : null;
+  const antiRepeat = variationKey ? getAntiRepeatData(variationKey) : { instruction: "", debug: null };
+  const taskPrompt = antiRepeat.instruction
+    ? `${baseTaskPrompt}\n\n${antiRepeat.instruction}`
+    : baseTaskPrompt;
 
   const llmRes = await generateText({
     contextPack,
@@ -436,8 +495,24 @@ async function generateImagesFromUrl(url, options = {}) {
   }
 
   const out = { images: images.map(({ _debug, ...img }) => img) };
+  if (variationKey) {
+    const signatureSource = images
+      .map((img) => `${img.caption || ""}\n${img.prompt || ""}`)
+      .filter(Boolean)
+      .join("\n");
+    const signatures = extractSignatures(signatureSource);
+    rememberOutput(variationKey, signatures);
+  }
   if (debug && images.length > 0 && images[0]._debug) {
-    out._debug = images[0]._debug;
+    out._debug = {
+      ...images[0]._debug,
+      antiRepeat: {
+        used: Boolean(antiRepeat && antiRepeat.instruction),
+        bannedHooks: antiRepeat?.debug?.bannedHooks || [],
+        bannedCtas: antiRepeat?.debug?.bannedCtas || [],
+        storeKey: antiRepeat?.debug?.storeKey || "",
+      },
+    };
   }
   return out;
 }
@@ -475,7 +550,18 @@ async function generateProductVariants(options) {
     routeName: "ads/product-variants",
   });
 
-  const taskPrompt = `Vytvoř ${variants} nápadů na reklamní scény pro produkt (viz zadání). Styl: ${stylePrompt}. Pro každou scénu: 1) prompt v angličtině pro AI image model (image-to-image): "Use the provided product photo as the main subject. Keep product identity, shape, colors." + popis prostředí (studio, lifestyle). ŽÁDNÝ text v obrázku. 2) caption v češtině (CTA). Vrať JEDINĚ platný JSON: { "items": [ { "prompt": "english...", "caption": "český caption" }, ... ] }. Přesně ${variants} položek.`;
+  const baseTaskPrompt = `Vytvoř ${variants} nápadů na reklamní scény pro produkt (viz zadání). Styl: ${stylePrompt}. Pro každou scénu: 1) prompt v angličtině pro AI image model (image-to-image): "Use the provided product photo as the main subject. Keep product identity, shape, colors." + popis prostředí (studio, lifestyle). ŽÁDNÝ text v obrázku. 2) caption v češtině (CTA). Vrať JEDINĚ platný JSON: { "items": [ { "prompt": "english...", "caption": "český caption" }, ... ] }. Přesně ${variants} položek.`;
+  const variationKeyBase = options.variationKey || null;
+  const variationKey = variationKeyBase
+    ? {
+        ...variationKeyBase,
+        industry: contextPack.resolvedIndustry || variationKeyBase.industry || "",
+      }
+    : null;
+  const antiRepeat = variationKey ? getAntiRepeatData(variationKey) : { instruction: "", debug: null };
+  const taskPrompt = antiRepeat.instruction
+    ? `${baseTaskPrompt}\n\n${antiRepeat.instruction}`
+    : baseTaskPrompt;
 
   const llmRes = await generateText({
     contextPack,
@@ -583,8 +669,24 @@ async function generateProductVariants(options) {
   }
 
   const out = { images: images.map(({ _debug, ...img }) => img) };
+  if (variationKey) {
+    const signatureSource = images
+      .map((img) => `${img.caption || ""}\n${img.prompt || ""}`)
+      .filter(Boolean)
+      .join("\n");
+    const signatures = extractSignatures(signatureSource);
+    rememberOutput(variationKey, signatures);
+  }
   if (debug && images.length > 0 && images[0]._debug) {
-    out._debug = images[0]._debug;
+    out._debug = {
+      ...images[0]._debug,
+      antiRepeat: {
+        used: Boolean(antiRepeat && antiRepeat.instruction),
+        bannedHooks: antiRepeat?.debug?.bannedHooks || [],
+        bannedCtas: antiRepeat?.debug?.bannedCtas || [],
+        storeKey: antiRepeat?.debug?.storeKey || "",
+      },
+    };
   }
   return out;
 }

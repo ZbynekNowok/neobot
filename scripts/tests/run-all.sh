@@ -172,6 +172,77 @@ if [ "$SUSPECTED" = "true" ]; then
   report INFO "suspectedCollage true (investigate)"
 fi
 
+# --- PART F: Content generate platform ---
+echo "=== Part F: Content generate platform ==="
+
+CONTENT_BODY_FB='{"prompt":"x","type":"ad","platform":"facebook"}'
+CONTENT_RESP_BODY=$(curl -s -w "\n%{http_code}" "${BASE_URL}/api/content/generate" \
+  -H "Content-Type: application/json" \
+  -d "$CONTENT_BODY_FB" 2>/dev/null)
+CONTENT_HTTP_BODY=$(echo "$CONTENT_RESP_BODY" | head -n -1)
+CONTENT_HTTP_CODE=$(echo "$CONTENT_RESP_BODY" | tail -n 1)
+if echo "$CONTENT_HTTP_BODY" | grep -q "Platform must be 'facebook' or 'instagram'"; then
+  report FAIL "content/generate platform in body (rejected valid facebook)"
+else
+  report PASS "content/generate platform in body (facebook accepted)"
+fi
+
+CONTENT_RESP_QUERY=$(curl -s -w "\n%{http_code}" "${BASE_URL}/api/content/generate?platform=facebook" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"x","type":"ad"}' 2>/dev/null)
+CONTENT_QUERY_BODY=$(echo "$CONTENT_RESP_QUERY" | head -n -1)
+if echo "$CONTENT_QUERY_BODY" | grep -q "Platform must be 'facebook' or 'instagram'"; then
+  report FAIL "content/generate platform in query (rejected valid facebook)"
+else
+  report PASS "content/generate platform in query (facebook accepted)"
+fi
+
+CONTENT_RESP_TIKTOK=$(curl -s -w "\n%{http_code}" "${BASE_URL}/api/content/generate" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"x","type":"ad","platform":"tiktok"}' 2>/dev/null)
+TIKTOK_BODY=$(echo "$CONTENT_RESP_TIKTOK" | head -n -1)
+TIKTOK_CODE=$(echo "$CONTENT_RESP_TIKTOK" | tail -n 1)
+if echo "$TIKTOK_BODY" | grep -q "Platform must be 'facebook' or 'instagram'" && [ "$TIKTOK_CODE" = "400" ]; then
+  report PASS "content/generate invalid platform (tiktok rejected)"
+else
+  report FAIL "content/generate invalid platform (tiktok must return 400 with platform error)"
+fi
+
+# --- PART G: Ads score endpoint ---
+echo "=== Part G: Ads score endpoint ==="
+
+SCORE_RESP=$(curl -s -w "\n%{http_code}" "${BASE_URL}/api/ads/score" \
+  -H "Content-Type: application/json" \
+  -d '{"adText":"Toto je testovací reklamní text, který má dostatečnou délku pro hodnocení.","headline":"Testovací nadpis","cta":"Zjistit více"}' 2>/dev/null || true)
+SCORE_BODY=$(echo "$SCORE_RESP" | head -n -1)
+SCORE_CODE=$(echo "$SCORE_RESP" | tail -n 1)
+
+if [ "$SCORE_CODE" != "200" ]; then
+  report FAIL "ads/score status $SCORE_CODE"
+else
+  if echo "$SCORE_BODY" | grep -q '"score"'; then
+    report PASS "ads/score basic JSON"
+  else
+    report FAIL "ads/score missing score field"
+  fi
+fi
+
+echo "--- Ads score topic vs automotive ---"
+INVEST_TEXT='Investiční podcast o akciích, fondech a dlouhodobém budování majetku.'
+SCORE_INVEST=$(curl -s "${BASE_URL}/api/ads/score" \
+  -H "Content-Type: application/json" \
+  -d "{\"adText\":\"${INVEST_TEXT}\"}" 2>/dev/null || true)
+
+if ! echo "$SCORE_INVEST" | grep -q '"score"'; then
+  report FAIL "ads/score invest topic (missing score)"
+else
+  if echo "$SCORE_INVEST" | grep -qiE '\b(auto|auta|vozy|autobazar|autosalon|autosal[oó]n|showroom|car dealer|dealership)\b'; then
+    report FAIL "ads/score invest topic (contains automotive terms)"
+  else
+    report PASS "ads/score invest topic (no automotive bleed)"
+  fi
+fi
+
 # --- PART E: Frontend static ---
 echo "=== Part E: Frontend static ==="
 

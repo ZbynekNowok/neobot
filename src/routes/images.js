@@ -1,10 +1,16 @@
 const express = require("express");
+const crypto = require("crypto");
 const { addJob } = require("../queue/jobQueue.js");
 const {
   composeImageWithText,
   renderCompositeOnly,
   getCanvasDimensions,
 } = require("../marketing/imageCompose.js");
+const {
+  extractSignatures,
+  getAntiRepeatData,
+  rememberOutput,
+} = require("../marketing/variationGuard.js");
 const { buildContextPack } = require("../context/contextEngine.js");
 const { generateImage } = require("../orchestrator/generate.js");
 
@@ -257,11 +263,29 @@ imagesRouter.post("/images/compose", async (req, res) => {
     const isDev = process.env.NODE_ENV !== "production";
     const debugEnabled = req.query?.debug === "1" || isDev;
 
+    const rawUserKey =
+      (req.headers && (req.headers["x-api-key"] || req.headers["x-api-key".toLowerCase()])) ||
+      req.ip ||
+      (req.headers && (req.headers["x-forwarded-for"] || req.headers["x-real-ip"])) ||
+      "anon";
+    const userHash = crypto.createHash("sha256").update(String(rawUserKey)).digest("hex").slice(0, 16);
+
     const contextPack = await buildContextPack({
       body: { ...body, prompt: prompt.trim(), userPrompt: prompt.trim(), outputType: "image" },
       workspace: req.workspace || null,
       routeName: "images/compose",
     });
+
+    const variationKey = {
+      userKey: userHash,
+      type: "image_compose",
+      industry: contextPack.resolvedIndustry || "",
+      platform: format,
+    };
+    const antiRepeat = getAntiRepeatData(variationKey);
+    if (antiRepeat.instruction) {
+      contextPack.brief = `${contextPack.brief}\n\n${antiRepeat.instruction}`;
+    }
 
     const result = await generateImage({
       contextPack,
@@ -286,9 +310,30 @@ imagesRouter.post("/images/compose", async (req, res) => {
       debug: debugEnabled,
     });
 
+    const signatureParts = [prompt];
+    if (!backgroundOnly && result && result.texts) {
+      const t = result.texts;
+      if (t.headline) signatureParts.push(t.headline);
+      if (t.subheadline) signatureParts.push(t.subheadline);
+      if (t.cta) signatureParts.push(t.cta);
+    }
+    const signatures = extractSignatures(signatureParts.filter(Boolean).join("\n"));
+    rememberOutput(variationKey, signatures);
+
     if (backgroundOnly) {
       const json = { ok: true, background: result.background };
       if (result._debug) json._debug = result._debug;
+      if (debugEnabled) {
+        json._debug = {
+          ...(json._debug || {}),
+          antiRepeat: {
+            used: Boolean(antiRepeat && antiRepeat.instruction),
+            bannedHooks: antiRepeat?.debug?.bannedHooks || [],
+            bannedCtas: antiRepeat?.debug?.bannedCtas || [],
+            storeKey: antiRepeat?.debug?.storeKey || "",
+          },
+        };
+      }
       return res.json(json);
     }
 
@@ -302,6 +347,17 @@ imagesRouter.post("/images/compose", async (req, res) => {
       resolution: result.resolution,
     };
     if (result._debug) json._debug = result._debug;
+    if (debugEnabled) {
+      json._debug = {
+        ...(json._debug || {}),
+        antiRepeat: {
+          used: Boolean(antiRepeat && antiRepeat.instruction),
+          bannedHooks: antiRepeat?.debug?.bannedHooks || [],
+          bannedCtas: antiRepeat?.debug?.bannedCtas || [],
+          storeKey: antiRepeat?.debug?.storeKey || "",
+        },
+      };
+    }
     return res.json(json);
   } catch (err) {
     if (err?.code === "RATE_LIMITED") {
