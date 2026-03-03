@@ -1,12 +1,13 @@
-import { useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { Link, useOutletContext } from "react-router-dom";
 import { UserProfile } from "@/components/app/AppLayout";
-import { Megaphone, Loader2, Copy, ImageIcon, Download } from "lucide-react";
+import { Megaphone, Loader2, Copy, ImageIcon, Download, History, Video } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { neobotFetch, NEOBOT_API_BASE, NEOBOT_API_KEY } from "@/lib/neobot";
+import { FeatureTile } from "@/components/ui/FeatureTile";
 
 interface AdsDraftBrand {
   name: string;
@@ -56,9 +57,68 @@ interface AdsVideo {
   format?: "story" | "square" | "landscape";
 }
 
+interface AdsScoreResult {
+  score: number;
+  summary: string;
+  strengths: string[];
+  weaknesses: string[];
+  suggestions: string[];
+  improvedVariants: {
+    adText: string;
+    headline?: string;
+    cta?: string;
+  }[];
+}
+
 type Status = "idle" | "loading" | "error" | "success";
 type ImageStatus = "idle" | "loading" | "error" | "success";
 type Resolution = "preview" | "standard" | "high";
+
+type CampaignSettingsGoal = "sale" | "lead" | "traffic" | "awareness" | "remarketing";
+type CampaignSettingsFunnel = "tofu" | "mofu" | "bofu" | "retargeting";
+type CampaignSettingsAngle =
+  | "auto"
+  | "price"
+  | "safety"
+  | "speed"
+  | "status"
+  | "comfort"
+  | "exclusivity"
+  | "social_proof"
+  | "scarcity";
+type CampaignSettingsTone = "soft" | "normal" | "hard";
+
+interface CampaignSettings {
+  goal: CampaignSettingsGoal;
+  funnel: CampaignSettingsFunnel;
+  angle: CampaignSettingsAngle;
+  salesTone: CampaignSettingsTone;
+  variants: 1 | 2 | 3;
+}
+
+type AdsStudioView =
+  | "hub"
+  | "generate"
+  | "history"
+  | "video"
+  | "images"
+  | "product-scenes"
+  | "score"
+  | "all";
+
+interface AdsStudioPageProps {
+  view?: AdsStudioView;
+}
+
+const CAMPAIGN_SETTINGS_STORAGE_KEY = "neobot_ads_studio_settings";
+
+const DEFAULT_CAMPAIGN_SETTINGS: CampaignSettings = {
+  goal: "sale",
+  funnel: "tofu",
+  angle: "auto",
+  salesTone: "normal",
+  variants: 1,
+};
 
 function buildClientProfile(profile: UserProfile | null) {
   return profile
@@ -76,7 +136,7 @@ function buildClientProfile(profile: UserProfile | null) {
     : undefined;
 }
 
-export default function AdsStudioPage() {
+export default function AdsStudioPage({ view = "all" }: AdsStudioPageProps) {
   const { profile } = useOutletContext<{ profile: UserProfile | null }>();
   const [url, setUrl] = useState("");
   const [status, setStatus] = useState<Status>("idle");
@@ -112,6 +172,129 @@ export default function AdsStudioPage() {
   const [videoError, setVideoError] = useState<string | null>(null);
   const [videoResult, setVideoResult] = useState<AdsVideo | null>(null);
 
+  const [scoreStatus, setScoreStatus] = useState<Status>("idle");
+  const [scoreError, setScoreError] = useState<string | null>(null);
+  const [scoreResult, setScoreResult] = useState<AdsScoreResult | null>(null);
+  const [scoreAdText, setScoreAdText] = useState("");
+  const [scoreHeadline, setScoreHeadline] = useState("");
+  const [scoreCta, setScoreCta] = useState("");
+  const [scoreUrl, setScoreUrl] = useState("");
+
+  const [campaignSettings, setCampaignSettings] = useState<CampaignSettings>(() => {
+    if (typeof window === "undefined") return DEFAULT_CAMPAIGN_SETTINGS;
+    try {
+      const raw = window.localStorage.getItem(CAMPAIGN_SETTINGS_STORAGE_KEY);
+      if (!raw) return DEFAULT_CAMPAIGN_SETTINGS;
+      const parsed = JSON.parse(raw);
+      return {
+        ...DEFAULT_CAMPAIGN_SETTINGS,
+        ...(parsed || {}),
+      };
+    } catch {
+      return DEFAULT_CAMPAIGN_SETTINGS;
+    }
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(CAMPAIGN_SETTINGS_STORAGE_KEY, JSON.stringify(campaignSettings));
+    } catch {
+      // ignore storage errors
+    }
+  }, [campaignSettings]);
+
+  const isHub = view === "hub";
+  const showGenerate = view === "generate" || view === "all";
+  const showHistory = view === "history" || view === "all";
+  const showVideo = view === "video" || view === "all";
+  const showImages = view === "images" || view === "all";
+  const showProductScenes = view === "product-scenes" || view === "all";
+  const showScore = view === "score";
+  const hubTiles = [
+    {
+      title: "Generátor reklam",
+      description: "Vygeneruj brand summary a reklamní texty z URL webu.",
+      icon: <Megaphone className="w-4 h-4" />,
+      href: "/app/ads-studio/generate",
+      disabled: false,
+      badgeText: undefined,
+      badgeTone: undefined,
+    },
+    {
+      title: "Historie",
+      description: "Prohlédni si historii vygenerovaných reklamních obrázků a scén.",
+      icon: <History className="w-4 h-4" />,
+      href: "/app/ads-studio/history",
+      disabled: false,
+      badgeText: undefined,
+      badgeTone: undefined,
+    },
+    {
+      title: "Video reklama",
+      description: "Vytvoř krátké reklamní video z existujícího obrázku.",
+      icon: <Video className="w-4 h-4" />,
+      href: "/app/ads-studio/video",
+      disabled: false,
+      badgeText: "BETA",
+      badgeTone: "warning" as const,
+    },
+    {
+      title: "Obrázkové reklamy",
+      description: "Generuj sadu reklamních obrázků podle URL webu.",
+      icon: <ImageIcon className="w-4 h-4" />,
+      href: "/app/ads-studio/images",
+      disabled: false,
+      badgeText: "BETA",
+      badgeTone: "warning" as const,
+    },
+    {
+      title: "Produktové scény",
+      description: "Nahraj produktovou fotku a vygeneruj marketingové scény.",
+      icon: <ImageIcon className="w-4 h-4" />,
+      href: "/app/ads-studio/product-scenes",
+      disabled: false,
+      badgeText: "BETA",
+      badgeTone: "warning" as const,
+    },
+    {
+      title: "Balíček reklam (1 klik)",
+      description: "Vygeneruje kompletní sadu reklam (texty, vizuály, video) z jednoho zadání.",
+      icon: <Megaphone className="w-4 h-4" />,
+      href: undefined,
+      disabled: true,
+      badgeText: "Připravujeme",
+      badgeTone: "danger" as const,
+    },
+    {
+      title: "A/B testovací sada",
+      description: "Připraví testovací kombinace hooků, headline a CTA pro efektivní testování.",
+      icon: <History className="w-4 h-4" />,
+      href: undefined,
+      disabled: true,
+      badgeText: "Připravujeme",
+      badgeTone: "danger" as const,
+    },
+    {
+      title: "Zlepšit reklamu (Skóre)",
+      description: "Vyhodnotí sílu reklamy a navrhne silnější verzi.",
+      icon: <Megaphone className="w-4 h-4" />,
+      href: "/app/ads-studio/skore-reklamy",
+      disabled: false,
+      badgeText: "BETA",
+      badgeTone: "warning" as const,
+    },
+    {
+      title: "Retargeting mód",
+      description: "Speciální generování reklam pro návštěvníky, kteří už web viděli.",
+      icon: <History className="w-4 h-4" />,
+      href: undefined,
+      disabled: true,
+      badgeText: "Připravujeme",
+      badgeTone: "danger" as const,
+    },
+  ] as const;
+
   const handleGenerate = async () => {
     const u = url.trim();
     if (!u) {
@@ -130,7 +313,12 @@ export default function AdsStudioPage() {
     try {
       const data = await neobotFetch("/api/ads/draft", {
         method: "POST",
-        body: JSON.stringify({ url: u }),
+        body: JSON.stringify({
+          url: u,
+          meta: {
+            settings: campaignSettings,
+          },
+        }),
       });
       if (!data?.ok && data?.brand === undefined) {
         throw new Error(data?.message || data?.error || "Nepodařilo se vygenerovat");
@@ -154,6 +342,76 @@ export default function AdsStudioPage() {
     toast.success(`${label} zkopírováno`);
   };
 
+  const handleScoreAd = async () => {
+    const ad = scoreAdText.trim();
+    const headline = scoreHeadline.trim();
+    const cta = scoreCta.trim();
+    const url = scoreUrl.trim();
+
+    if (!ad || ad.length < 20) {
+      toast.error("Text reklamy musí mít alespoň 20 znaků.");
+      return;
+    }
+
+    setScoreStatus("loading");
+    setScoreError(null);
+    setScoreResult(null);
+
+    const payload: any = {
+      adText: ad,
+      meta: {
+        settings: campaignSettings,
+      },
+    };
+    if (headline) payload.headline = headline;
+    if (cta) payload.cta = cta;
+    if (url) payload.url = url;
+
+    try {
+      const data = await neobotFetch("/api/ads/score", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+
+      if (!data || data.ok === false || typeof data.score !== "number") {
+        throw new Error(data?.message || data?.error || "Nepodařilo se vyhodnotit reklamu");
+      }
+
+      const toStringArray = (v: unknown): string[] => {
+        if (!Array.isArray(v)) return [];
+        return v
+          .map((item) => (typeof item === "string" ? item.trim() : ""))
+          .filter(Boolean);
+      };
+
+      const result: AdsScoreResult = {
+        score: Number.isFinite(data.score) ? data.score : 0,
+        summary: typeof data.summary === "string" ? data.summary : "",
+        strengths: toStringArray(data.strengths),
+        weaknesses: toStringArray(data.weaknesses),
+        suggestions: toStringArray(data.suggestions),
+        improvedVariants: Array.isArray(data.improvedVariants)
+          ? data.improvedVariants
+              .map((v: any) => ({
+                adText: typeof v?.adText === "string" ? v.adText : "",
+                headline: typeof v?.headline === "string" ? v.headline : undefined,
+                cta: typeof v?.cta === "string" ? v.cta : undefined,
+              }))
+              .filter((v: { adText: string }) => v.adText.trim().length > 0)
+          : [],
+      };
+
+      setScoreResult(result);
+      setScoreStatus("success");
+      toast.success("Reklama byla vyhodnocena a vylepšena.");
+    } catch (err: any) {
+      const msg = err?.message || "Chyba při vyhodnocení reklamy";
+      setScoreError(msg);
+      setScoreStatus("error");
+      toast.error(msg);
+    }
+  };
+
   const handleGenerateProductVariants = async () => {
     if (!productFile) {
       toast.error("Vyberte produktovou fotku");
@@ -172,6 +430,12 @@ export default function AdsStudioPage() {
     if (productName.trim()) form.append("productName", productName.trim());
     const clientProfile = buildClientProfile(profile);
     if (clientProfile) form.append("clientProfile", JSON.stringify(clientProfile));
+    form.append(
+      "meta",
+      JSON.stringify({
+        settings: campaignSettings,
+      }),
+    );
     try {
       const res = await fetch(`${NEOBOT_API_BASE}/api/ads/product-variants`, {
         method: "POST",
@@ -232,6 +496,9 @@ export default function AdsStudioPage() {
           format: imageFormat,
           resolution,
           clientProfile: buildClientProfile(profile),
+          meta: {
+            settings: campaignSettings,
+          },
         }),
       });
       if (!data?.ok || !Array.isArray(data?.images)) {
@@ -303,6 +570,9 @@ export default function AdsStudioPage() {
           imageUrl: img,
           format: videoFormat,
           duration: dur,
+          meta: {
+            settings: campaignSettings,
+          },
         }),
       });
       if (!data?.ok || !data?.video) {
@@ -351,13 +621,243 @@ export default function AdsStudioPage() {
       <div className="mb-8">
         <h1 className="font-display text-2xl md:text-3xl font-bold text-foreground mb-2 flex items-center gap-2">
           <Megaphone className="w-8 h-8" />
-          AI Ads Studio
+          Reklamní studio
         </h1>
-        <p className="text-muted-foreground">
-          Zadej URL webu a vygeneruj brand summary a reklamní texty pro Meta a Google.
-        </p>
+        {isHub ? (
+          <p className="text-muted-foreground">
+            Vyberte, co chcete dělat – generovat texty, obrázky, video nebo pracovat s historií reklam.
+          </p>
+        ) : (
+          <p className="text-muted-foreground">
+            {view === "score"
+              ? "Vlož existující reklamní text a nech AI zhodnotit jeho sílu a navrhnout lepší varianty."
+              : "Zadej URL webu a vygeneruj brand summary a reklamní texty pro Meta a Google."}
+          </p>
+        )}
       </div>
 
+      <div className="glass rounded-xl p-4 mb-6">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="space-y-1">
+            <Label className="text-xs text-muted-foreground">Cíl kampaně</Label>
+            <select
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+              value={campaignSettings.goal}
+              onChange={(e) =>
+                setCampaignSettings((prev) => ({
+                  ...prev,
+                  goal: e.target.value as CampaignSettingsGoal,
+                }))
+              }
+            >
+              <option value="sale">Prodej</option>
+              <option value="lead">Poptávky (lead)</option>
+              <option value="traffic">Návštěvnost</option>
+              <option value="awareness">Povědomí</option>
+              <option value="remarketing">Remarketing</option>
+            </select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs text-muted-foreground">Fáze funnelu</Label>
+            <select
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+              value={campaignSettings.funnel}
+              onChange={(e) =>
+                setCampaignSettings((prev) => ({
+                  ...prev,
+                  funnel: e.target.value as CampaignSettingsFunnel,
+                }))
+              }
+            >
+              <option value="tofu">TOFU</option>
+              <option value="mofu">MOFU</option>
+              <option value="bofu">BOFU</option>
+              <option value="retargeting">Retargeting</option>
+            </select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs text-muted-foreground">Kreativní úhel</Label>
+            <select
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+              value={campaignSettings.angle}
+              onChange={(e) =>
+                setCampaignSettings((prev) => ({
+                  ...prev,
+                  angle: e.target.value as CampaignSettingsAngle,
+                }))
+              }
+            >
+              <option value="auto">Auto (AI)</option>
+              <option value="price">Cena</option>
+              <option value="safety">Bezpečí</option>
+              <option value="speed">Rychlost</option>
+              <option value="status">Status</option>
+              <option value="comfort">Komfort</option>
+              <option value="exclusivity">Exkluzivita</option>
+              <option value="social_proof">Sociální důkaz</option>
+              <option value="scarcity">Omezená nabídka</option>
+            </select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs text-muted-foreground">Prodejní styl</Label>
+            <select
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+              value={campaignSettings.salesTone}
+              onChange={(e) =>
+                setCampaignSettings((prev) => ({
+                  ...prev,
+                  salesTone: e.target.value as CampaignSettingsTone,
+                }))
+              }
+            >
+              <option value="soft">Jemně</option>
+              <option value="normal">Normálně</option>
+              <option value="hard">Tvrdě (ClickSales)</option>
+            </select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs text-muted-foreground">Počet variant</Label>
+            <select
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+              value={campaignSettings.variants}
+              onChange={(e) =>
+                setCampaignSettings((prev) => ({
+                  ...prev,
+                  variants: Number(e.target.value) as 1 | 2 | 3,
+                }))
+              }
+            >
+              <option value={1}>1</option>
+              <option value={2}>2</option>
+              <option value={3}>3</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {isHub && (
+        <div className="grid gap-4 mb-8 sm:grid-cols-2 lg:grid-cols-3">
+          {hubTiles.map((tile) => (
+            <FeatureTile
+              key={tile.title}
+              title={tile.title}
+              description={tile.description}
+              icon={tile.icon}
+              href={tile.href}
+              disabled={tile.disabled}
+              badgeText={tile.badgeText}
+              badgeTone={tile.badgeTone}
+            />
+          ))}
+        </div>
+      )}
+
+      {showScore && (
+        <div className="glass rounded-xl p-6 mb-6">
+          <h2 className="font-semibold text-lg text-foreground mb-3">
+            Zlepšit reklamu (Skóre)
+          </h2>
+          <p className="text-muted-foreground text-sm mb-4">
+            Vlož existující reklamní text a nech AI vyhodnotit jeho sílu, pojmenovat silné a slabé
+            stránky a navrhnout vylepšené varianty. Počet variant se řídí nastavením v panelu
+            kampaně výše.
+          </p>
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground" htmlFor="score-ad-text">
+                Text reklamy (povinné)
+              </Label>
+              <textarea
+                id="score-ad-text"
+                className="w-full rounded-md border bg-background px-3 py-2 text-sm min-h-[140px]"
+                placeholder="Vlož primární text reklamy, který chceš vyhodnotit a vylepšit…"
+                value={scoreAdText}
+                onChange={(e) => setScoreAdText(e.target.value)}
+                disabled={scoreStatus === "loading"}
+              />
+            </div>
+            <div className="grid gap-4 md:grid-cols-3">
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground" htmlFor="score-headline">
+                  Headline (volitelné)
+                </Label>
+                <Input
+                  id="score-headline"
+                  placeholder="Krátký nadpis reklamy"
+                  value={scoreHeadline}
+                  onChange={(e) => setScoreHeadline(e.target.value)}
+                  disabled={scoreStatus === "loading"}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground" htmlFor="score-cta">
+                  CTA (volitelné)
+                </Label>
+                <Input
+                  id="score-cta"
+                  placeholder="Např. Zjistit více, Objednat teď…"
+                  value={scoreCta}
+                  onChange={(e) => setScoreCta(e.target.value)}
+                  disabled={scoreStatus === "loading"}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground" htmlFor="score-url">
+                  URL landing page (volitelné)
+                </Label>
+                <Input
+                  id="score-url"
+                  placeholder="https://… (pouze kontext, neprovádí se žádný crawl)"
+                  value={scoreUrl}
+                  onChange={(e) => setScoreUrl(e.target.value)}
+                  disabled={scoreStatus === "loading"}
+                />
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <Button
+                type="button"
+                onClick={handleScoreAd}
+                disabled={scoreStatus === "loading"}
+                className="gap-2"
+              >
+                {scoreStatus === "loading" ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Vyhodnocuji…
+                  </>
+                ) : (
+                  "Vyhodnotit a vylepšit"
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!isHub && (
+        <div className="mb-6 flex items-center justify-between gap-4">
+          <div>
+            <h2 className="font-semibold text-lg text-foreground mb-1">
+              {view === "generate" && "Generátor reklam"}
+              {view === "history" && "Historie reklam"}
+              {view === "video" && "Video reklama"}
+              {view === "images" && "Obrázkové reklamy"}
+              {view === "product-scenes" && "Produktové scény"}
+              {view === "score" && "Zlepšit reklamu (Skóre)"}
+              {view === "all" && "Reklamní studio – všechny funkce"}
+            </h2>
+            <p className="text-xs text-muted-foreground">
+              <span className="font-medium">Tato stránka používá stejné API a logiku jako původní Ads Studio.</span>
+            </p>
+          </div>
+          <Button asChild variant="outline" size="sm">
+            <Link to="/app/ads-studio">Zpět do studia</Link>
+          </Button>
+        </div>
+      )}
+
+      {showGenerate && (
       <div className="glass rounded-xl p-6 mb-6">
         <Label htmlFor="ads-url">URL webu</Label>
         <div className="flex gap-2 mt-2">
@@ -383,7 +883,9 @@ export default function AdsStudioPage() {
           </Button>
         </div>
       </div>
+      )}
 
+      {showHistory && (
       <div className="glass rounded-xl p-6 mb-6">
         <h2 className="font-semibold text-lg text-foreground mb-3 flex items-center gap-2">
           <ImageIcon className="w-5 h-5" />
@@ -417,7 +919,9 @@ export default function AdsStudioPage() {
           )}
         </div>
       </div>
+      )}
 
+      {showVideo && (
       <div className="glass rounded-xl p-6 mb-6">
         <h2 className="font-semibold text-lg text-foreground mb-3 flex items-center gap-2">
           <ImageIcon className="w-5 h-5" />
@@ -484,12 +988,12 @@ export default function AdsStudioPage() {
             )}
           </Button>
         </div>
-        {videoStatus === "error" && videoError && (
+        {videoStatus === "error" && videoError && showVideo && (
           <div className="mt-3 rounded-xl border border-destructive/50 bg-destructive/10 p-3 text-destructive text-sm">
             {videoError}
           </div>
         )}
-        {videoStatus === "success" && videoResult && (
+        {videoStatus === "success" && videoResult && showVideo && (
           <div className="mt-4 space-y-3">
             <p className="text-sm text-muted-foreground">
               Video vygenerováno ({videoResult.width}×{videoResult.height},{" "}
@@ -518,7 +1022,9 @@ export default function AdsStudioPage() {
           </div>
         )}
       </div>
+      )}
 
+      {showImages && (
       <div className="glass rounded-xl p-6 mb-6">
         <h2 className="font-semibold text-lg text-foreground mb-3 flex items-center gap-2">
           <ImageIcon className="w-5 h-5" />
@@ -583,7 +1089,9 @@ export default function AdsStudioPage() {
           </Button>
         </div>
       </div>
+      )}
 
+      {showProductScenes && (
       <div className="glass rounded-xl p-6 mb-6">
         <h2 className="font-semibold text-lg text-foreground mb-3 flex items-center gap-2">
           <ImageIcon className="w-5 h-5" />
@@ -669,14 +1177,15 @@ export default function AdsStudioPage() {
           </Button>
         </div>
       </div>
+      )}
 
-      {status === "error" && error && (
+      {status === "error" && error && showGenerate && (
         <div className="rounded-xl border border-destructive/50 bg-destructive/10 p-4 text-destructive mb-6">
           {error}
         </div>
       )}
 
-      {imageStatus === "error" && imageError && (
+      {imageStatus === "error" && imageError && showImages && (
         <div className="rounded-xl border border-destructive/50 bg-destructive/10 p-4 text-destructive mb-6 space-y-2">
           <p>{imageError}</p>
           {imageRetryAfterSeconds != null && (
@@ -696,7 +1205,7 @@ export default function AdsStudioPage() {
         </div>
       )}
 
-      {productStatus === "error" && productError && (
+      {productStatus === "error" && productError && showProductScenes && (
         <div className="rounded-xl border border-destructive/50 bg-destructive/10 p-4 text-destructive mb-6 space-y-2">
           <p>{productError}</p>
           {productRetryAfterSeconds != null && (
@@ -716,13 +1225,19 @@ export default function AdsStudioPage() {
         </div>
       )}
 
-      {historyStatus === "error" && historyError && (
+      {scoreStatus === "error" && scoreError && showScore && (
+        <div className="rounded-xl border border-destructive/50 bg-destructive/10 p-4 text-destructive mb-6">
+          {scoreError}
+        </div>
+      )}
+
+      {historyStatus === "error" && historyError && showHistory && (
         <div className="rounded-xl border border-destructive/50 bg-destructive/10 p-4 text-destructive mb-6">
           {historyError}
         </div>
       )}
 
-      {historyStatus === "success" && historyItems.length > 0 && (
+      {historyStatus === "success" && historyItems.length > 0 && showHistory && (
         <div className="mb-8">
           <h2 className="font-semibold text-lg text-foreground mb-4">Historie reklamních obrázků</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -786,7 +1301,7 @@ export default function AdsStudioPage() {
         </div>
       )}
 
-      {imageStatus === "success" && imageResult.length > 0 && (
+      {imageStatus === "success" && imageResult.length > 0 && showImages && (
         <div className="mb-8">
           <h2 className="font-semibold text-lg text-foreground mb-4">Vygenerované obrázky</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -836,7 +1351,7 @@ export default function AdsStudioPage() {
         </div>
       )}
 
-      {productStatus === "success" && productResult.length > 0 && (
+      {productStatus === "success" && productResult.length > 0 && showProductScenes && (
         <div className="mb-8">
           <h2 className="font-semibold text-lg text-foreground mb-4">Vygenerované reklamní scény</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -886,7 +1401,7 @@ export default function AdsStudioPage() {
         </div>
       )}
 
-      {status === "success" && result && (
+      {status === "success" && result && showGenerate && (
         <div className="grid gap-6 md:grid-cols-2">
           {/* Brand */}
           <div className="glass rounded-xl p-6 space-y-4">
@@ -943,8 +1458,89 @@ export default function AdsStudioPage() {
         </div>
       )}
 
-      {status === "idle" && !result && (
+      {status === "idle" && !result && showGenerate && (
         <p className="text-muted-foreground text-sm">Zadej URL a klikni na „Generovat reklamu“.</p>
+      )}
+
+      {scoreStatus === "success" && scoreResult && showScore && (
+        <div className="grid gap-6 md:grid-cols-2">
+          <div className="glass rounded-xl p-6 space-y-4">
+            <div className="flex items-baseline justify-between gap-4">
+              <div>
+                <h3 className="font-semibold text-lg text-foreground">Skóre reklamy</h3>
+                {scoreResult.summary && (
+                  <p className="text-sm text-muted-foreground mt-1">{scoreResult.summary}</p>
+                )}
+              </div>
+              <div className="text-right">
+                <div className="text-3xl font-bold text-foreground">
+                  {scoreResult.score.toFixed(1).replace(".0", "")}
+                </div>
+                <div className="text-xs text-muted-foreground">z 10</div>
+              </div>
+            </div>
+            {scoreResult.strengths.length > 0 &&
+              renderList(scoreResult.strengths, "Silné stránky")}
+            {scoreResult.weaknesses.length > 0 &&
+              renderList(scoreResult.weaknesses, "Slabiny")}
+            {scoreResult.suggestions.length > 0 &&
+              renderList(scoreResult.suggestions, "Doporučení pro zlepšení")}
+          </div>
+
+          {scoreResult.improvedVariants.length > 0 && (
+            <div className="glass rounded-xl p-6 space-y-4">
+              <h3 className="font-semibold text-lg text-foreground">Vylepšené varianty</h3>
+              <p className="text-xs text-muted-foreground">
+                Kliknutím na tlačítko zkopíruješ celý text varianty do schránky.
+              </p>
+              <div className="space-y-3">
+                {scoreResult.improvedVariants.map((variant, index) => {
+                  const combined = [
+                    variant.headline,
+                    variant.adText,
+                    variant.cta ? `CTA: ${variant.cta}` : null,
+                  ]
+                    .filter(Boolean)
+                    .join("\n\n");
+
+                  return (
+                    <div key={index} className="rounded-lg border border-border/60 bg-background/40 p-3 space-y-2">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="space-y-1">
+                          <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                            Varianta {index + 1}
+                          </div>
+                          {variant.headline && (
+                            <div className="font-semibold text-sm text-foreground">
+                              {variant.headline}
+                            </div>
+                          )}
+                          <p className="text-sm text-foreground whitespace-pre-line">
+                            {variant.adText}
+                          </p>
+                          {variant.cta && (
+                            <p className="text-xs text-muted-foreground">
+                              <span className="font-medium">CTA:</span> {variant.cta}
+                            </p>
+                          )}
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="shrink-0 h-8 w-8"
+                          onClick={() => copyText(combined, `Varianta ${index + 1}`)}
+                        >
+                          <Copy className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

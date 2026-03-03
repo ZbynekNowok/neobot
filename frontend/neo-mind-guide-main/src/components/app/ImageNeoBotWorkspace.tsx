@@ -1536,7 +1536,6 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
                     <label className="text-sm font-medium text-foreground">CTA</label>
                     <Input value={draftTexts.cta} onChange={e => setDraftTexts(prev => ({ ...prev, cta: e.target.value }))} className="bg-background/50" />
                   </div>
-                </div>
                 <div className="sticky bottom-0 pt-3 bg-gradient-to-t from-black/70 to-transparent space-y-2">
                   <Button className="w-full" onClick={handleUpdateLayout} disabled={loadingRender || !composeState}>
                     {loadingRender ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Aktualizuji…</> : "Použít změny"}
@@ -1545,8 +1544,9 @@ export default function ImageNeoBotWorkspace({ profile, onBack }: ImageNeoBotWor
                     Zrušit úpravy
                   </Button>
                 </div>
-                  </>
-                  )}
+                </>
+                )}
+                </div>
               </div>
             </div>
           ) : outputMode === "marketing" ? (

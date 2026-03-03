@@ -27,6 +27,8 @@ import SeoHistoryPage from "./pages/app/SeoHistoryPage";
 import PublishCenterPage from "./pages/app/PublishCenterPage";
 import ConnectionsPage from "./pages/app/ConnectionsPage";
 import AdsStudioPage from "./pages/app/AdsStudioPage";
+import CampaignsPage from "./pages/app/CampaignsPage";
+import IntelligencePage from "./pages/app/IntelligencePage";
 
 const queryClient = new QueryClient();
 
@@ -55,12 +57,23 @@ const App = () => (
             <Route path="tvorba" element={<ContentCreationPage />} />
             <Route path="historie" element={<HistoryPage />} />
             <Route path="nastaveni" element={<SettingsPage />} />
+            <Route path="kampane" element={<CampaignsPage />} />
+            <Route path="inteligence" element={<IntelligencePage />} />
             <Route path="seo/generator" element={<SeoGeneratorPage />} />
             <Route path="seo/audit" element={<SeoAuditPage />} />
             <Route path="seo/historie" element={<SeoHistoryPage />} />
             <Route path="publish" element={<PublishCenterPage />} />
             <Route path="publish/connections" element={<ConnectionsPage />} />
-            <Route path="ads" element={<AdsStudioPage />} />
+            {/* Reklamní studio – původní route (all-in-one) kvůli zpětné kompatibilitě */}
+            <Route path="ads" element={<AdsStudioPage view="all" />} />
+            {/* Nové routy pro Ads Studio */}
+            <Route path="ads-studio" element={<AdsStudioPage view="hub" />} />
+            <Route path="ads-studio/generate" element={<AdsStudioPage view="generate" />} />
+            <Route path="ads-studio/history" element={<AdsStudioPage view="history" />} />
+            <Route path="ads-studio/video" element={<AdsStudioPage view="video" />} />
+            <Route path="ads-studio/images" element={<AdsStudioPage view="images" />} />
+            <Route path="ads-studio/product-scenes" element={<AdsStudioPage view="product-scenes" />} />
+            <Route path="ads-studio/skore-reklamy" element={<AdsStudioPage view="score" />} />
           </Route>
           <Route path="*" element={<NotFound />} />
         </Routes>

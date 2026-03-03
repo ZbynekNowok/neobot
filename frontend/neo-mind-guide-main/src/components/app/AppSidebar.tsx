@@ -57,7 +57,15 @@ const publishMenuItems = [
 ];
 
 const adsMenuItems = [
-  { title: "Reklamní studio", url: "/app/ads", icon: Megaphone },
+  { title: "Reklamní studio", url: "/app/ads-studio", icon: Megaphone },
+];
+
+const campaignsMenuItems = [
+  { title: "Kampaně", url: "/app/kampane", icon: Target },
+];
+
+const intelligenceMenuItems = [
+  { title: "Inteligence", url: "/app/inteligence", icon: Search },
 ];
 
 const settingsMenuItems = [
@@ -132,6 +140,14 @@ export function AppSidebar() {
         <SidebarSeparator />
 
         {renderGroup("Reklamní studio", adsMenuItems)}
+
+        <SidebarSeparator />
+
+        {renderGroup("Kampaně", campaignsMenuItems)}
+
+        <SidebarSeparator />
+
+        {renderGroup("Inteligence", intelligenceMenuItems)}
 
         <SidebarSeparator />
 
